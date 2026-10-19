@@ -1,0 +1,92 @@
+name: Android APK
+
+# Builds a signed Logbook.apk on every push to main and publishes it as the
+# latest GitHub release, so the phone can always download the newest build from
+#   https://github.com/<you>/<repo>/releases/latest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error title=Signing key missing::Add the repository secrets ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions), then re-run this workflow."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > "$RUNNER_TEMP/logbook.keystore"
+          keytool -list -keystore "$RUNNER_TEMP/logbook.keystore" -storepass "$KEYSTORE_PASSWORD" > /dev/null
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build web app
+        run: npm run build
+        env:
+          APP_VERSION: ${{ env.VERSION }}
+
+      - name: Copy web app into the Android project
+        run: npx cap sync android
+
+      - name: Build signed APK
+        working-directory: android
+        env:
+          LOGBOOK_KEYSTORE: ${{ runner.temp }}/logbook.keystore
+          LOGBOOK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -PversionCode=${{ github.run_number }} -PversionName=$VERSION
+
+      - name: Collect APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk Logbook.apk
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Logbook-${{ env.VERSION }}
+          path: Logbook.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: Logbook ${{ env.VERSION }}
+          make_latest: 'true'
+          files: Logbook.apk
+          body: |
+            **Install:** open this page on your Android phone, tap **Logbook.apk** and then **Install**.
+            Updates install over the previous version and keep your log.
