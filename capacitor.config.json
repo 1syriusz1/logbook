@@ -1,0 +1,19 @@
+{
+  "appId": "app.logbook.gym",
+  "appName": "Logbook",
+  "webDir": "dist",
+  "backgroundColor": "#0b0c0d",
+  "android": {
+    "backgroundColor": "#0b0c0d",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK",
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover"
+    }
+  }
+}

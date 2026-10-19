@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Logbook</string>
+    <string name="title_activity_main">Logbook</string>
+    <string name="package_name">app.logbook.gym</string>
+    <string name="custom_url_scheme">app.logbook.gym</string>
+</resources>
