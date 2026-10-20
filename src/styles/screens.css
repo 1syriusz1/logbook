@@ -1072,3 +1072,14 @@ button.stat-card {
 .delta.neutral {
   color: var(--fg-2);
 }
+
+.hero-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.link-row {
+  width: 100%;
+  text-align: left;
+}

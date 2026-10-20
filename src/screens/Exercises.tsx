@@ -3,7 +3,7 @@ import type { Muscle } from '../lib/types';
 import { nav, type Layer } from '../lib/nav';
 import { useData } from '../lib/derived';
 import { exerciseRecords, RANGES, rangeStart, type RangeKey, type Session } from '../lib/stats';
-import { EQUIPMENT_LABEL, MUSCLE_LABEL, MUSCLES } from '../lib/exercises';
+import { equipmentLabel, MUSCLE_LABEL, MUSCLES } from '../lib/exercises';
 import { fmtCompact, fmtDate, fmtDayMonth, fmtKg, fmtNum, fmtRelDay, plural } from '../lib/format';
 import { prLabel, setText } from '../lib/labels';
 import { Chips, Delta, Empty, IconButton, Num, PRBadge, Segmented } from '../components/ui';
@@ -60,7 +60,9 @@ export function Exercises() {
             {tracked.map((e) => {
               const sessions = data.sessions.get(e.id) ?? [];
               const last = sessions[sessions.length - 1];
-              const series = sessions.slice(-10).map((s) => (e.kind === 'bodyweight' ? s.maxReps : s.bestE1rm));
+              const series = sessions
+                .slice(-10)
+                .map((s) => (e.kind === 'bodyweight' ? (e.loaded ? s.topKg : s.maxReps) : s.bestE1rm));
               return (
                 <button key={e.id} className="row" onClick={() => nav.push({ name: 'exercise', id: e.id })}>
                   <span className="row-main">
@@ -89,7 +91,7 @@ export function Exercises() {
                 <div className="row-main">
                   <div className="row-title">{e.name}</div>
                   <div className="row-sub">
-                    {MUSCLE_LABEL[e.muscle]} · {EQUIPMENT_LABEL[e.equipment]}
+                    {MUSCLE_LABEL[e.muscle]} · {equipmentLabel(e)}
                     {e.custom ? ' · yours' : ''}
                   </div>
                 </div>
@@ -124,7 +126,7 @@ const METRIC_INFO: Record<Metric, { label: string; unit: string; note: string }>
   volume: { label: 'Volume', unit: 'kg', note: 'Weight × reps, summed per session.' },
   reps: { label: 'Best set', unit: 'reps', note: 'Most reps in one set per session.' },
   total: { label: 'Total reps', unit: 'reps', note: 'All reps per session.' },
-  added: { label: 'Added', unit: 'kg', note: 'Heaviest added load per session.' },
+  added: { label: 'Added weight', unit: 'kg', note: 'Heaviest added load per session.' },
 };
 
 function metricValue(s: Session, m: Metric): number {
@@ -151,7 +153,13 @@ export function ExercisePage({ layer, id }: { layer: Layer; id: string }) {
   const records = useMemo(() => exerciseRecords(sessions), [sessions]);
   const bw = ex?.kind === 'bodyweight';
   const everAdded = sessions.some((s) => s.sets.some((x) => x.kg > 0));
-  const metrics: Metric[] = bw ? (everAdded ? ['reps', 'total', 'added'] : ['reps', 'total']) : ['e1rm', 'top', 'volume'];
+  const metrics: Metric[] = bw
+    ? ex?.loaded
+      ? ['added', 'reps', 'total']
+      : everAdded
+        ? ['reps', 'total', 'added']
+        : ['reps', 'total']
+    : ['e1rm', 'top', 'volume'];
   const [metric, setMetric] = useState<Metric>(metrics[0]);
   const [range, setRange] = useState<RangeKey>('6m');
   const [scrub, setScrub] = useState<number | null>(null);
@@ -183,7 +191,7 @@ export function ExercisePage({ layer, id }: { layer: Layer; id: string }) {
     >
       <div className="page-hero">
         <div className="eyebrow">
-          {MUSCLE_LABEL[ex.muscle]} · {EQUIPMENT_LABEL[ex.equipment]}
+          {MUSCLE_LABEL[ex.muscle]} · {equipmentLabel(ex)}
         </div>
         <h1 className="title-xl">{ex.name}</h1>
         {sessions.length > 0 && (
@@ -229,11 +237,13 @@ export function ExercisePage({ layer, id }: { layer: Layer; id: string }) {
             </div>
             {pts.length ? (
               <LineChart
+                key={`${range}-${metric}`}
                 points={pts}
                 height={180}
                 formatY={(v) => (metric === 'volume' ? fmtCompact(v) : fmtNum(v, 1))}
                 onScrub={setScrub}
                 zero={metric === 'volume' || metric === 'total'}
+                tooltip={(i) => ({ value: `${fmtVal(metricValue(shown[i], metric))} ${info.unit}`, label: fmtDate(shown[i].date) })}
               />
             ) : (
               <div className="chart-empty">No sessions in this range</div>
@@ -253,16 +263,31 @@ export function ExercisePage({ layer, id }: { layer: Layer; id: string }) {
           <div className="bento rec-grid">
             {bw ? (
               <>
-                <RecordCard label="Most reps" value={records.mostReps ? <Num value={records.mostReps.reps} unit="reps" /> : '–'} sub={records.mostReps ? fmtDayMonth(records.mostReps.date) : ''} />
+                {everAdded && records.heaviest && records.heaviest.kg > 0 && (
+                  <RecordCard
+                    label="Heaviest added"
+                    value={<Num value={fmtKg(records.heaviest.kg)} unit="kg" />}
+                    sub={`× ${records.heaviest.reps} · ${fmtDayMonth(records.heaviest.date)}`}
+                  />
+                )}
+                <RecordCard
+                  label="Most reps"
+                  value={records.mostReps ? <Num value={records.mostReps.reps} unit="reps" /> : '–'}
+                  sub={records.mostReps ? `${setText(records.mostReps, ex)} · ${fmtDayMonth(records.mostReps.date)}` : ''}
+                />
                 <RecordCard
                   label="Best session"
                   value={<Num value={Math.max(...sessions.map((s) => s.totalReps))} unit="reps" />}
                   sub="total in one workout"
                 />
-                {everAdded && records.heaviest && (
-                  <RecordCard label="Heaviest added" value={<Num value={fmtKg(records.heaviest.kg)} unit="kg" />} sub={`× ${records.heaviest.reps} · ${fmtDayMonth(records.heaviest.date)}`} />
-                )}
                 <RecordCard label="Sessions" value={<Num value={sessions.length} />} sub={`last ${fmtRelDay(sessions[sessions.length - 1].date, Date.now(), true)}`} />
+                {!(everAdded && records.heaviest && records.heaviest.kg > 0) && (
+                  <RecordCard
+                    label="All reps"
+                    value={<Num value={fmtNum(sessions.reduce((a, s) => a + s.totalReps, 0))} unit="reps" />}
+                    sub="since the first session"
+                  />
+                )}
               </>
             ) : (
               <>
@@ -318,7 +343,7 @@ export function ExercisePage({ layer, id }: { layer: Layer; id: string }) {
                   {s.sets.map((x) => {
                     const kinds = data.prs.get(x.id);
                     return (
-                      <span key={x.id} className={`hs-set${kinds ? ' is-pr' : ''}`} title={kinds ? prLabel(kinds) : undefined}>
+                      <span key={x.id} className={`hs-set${kinds ? ' is-pr' : ''}`} title={kinds ? prLabel(kinds, x, ex) : undefined}>
                         {setText(x, ex)}
                         {kinds && <PRBadge />}
                       </span>

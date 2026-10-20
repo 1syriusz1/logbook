@@ -48,6 +48,7 @@ export function Stats() {
   const [wm, setWm] = useState<WeekMetric>('sets');
   const [wScrub, setWScrub] = useState<number | null>(null);
   const [dScrub, setDScrub] = useState<number | null>(null);
+  const [bwScrub, setBwScrub] = useState<number | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const { summaries } = data;
   const now = Date.now();
@@ -117,7 +118,17 @@ export function Stats() {
         </div>
       </header>
 
-      <Segmented label="Time range" value={range} onChange={(r) => { setRange(r); setWScrub(null); setDScrub(null); }} options={RANGES} />
+      <Segmented
+        label="Time range"
+        value={range}
+        onChange={(r) => {
+          setRange(r);
+          setWScrub(null);
+          setDScrub(null);
+          setBwScrub(null);
+        }}
+        options={RANGES}
+      />
 
       <div className="bento totals">
         <TotalCard label="Workouts" value={<Num value={T.workouts} />} delta={pct(T.workouts, P.workouts)} sub={`${fmtNum(T.workouts / Math.max(1, v.weeksCount), 1)} per week`} />
@@ -170,12 +181,19 @@ export function Stats() {
           <div className="chart-sub">{focusWeek ? <>Week of <b>{fmtDayMonth(focusWeek.start)}</b> · {plural(focusWeek.workouts, 'workout')}</> : 'Weekly average · dashed line'}</div>
         </div>
         <BarChart
+          key={`${range}-${wm}`}
           bars={bars}
           height={150}
           average={avgWeek}
           current={bars.length - 1}
           onScrub={setWScrub}
           formatY={(val) => (wm === 'time' ? `${Math.round(val / 60)}h` : wm === 'volume' ? fmtCompact(val) : fmtNum(val))}
+          tooltip={(i) => {
+            const val = weekVal(weeks[i]);
+            const value =
+              wm === 'sets' ? plural(val, 'set') : wm === 'workouts' ? plural(val, 'workout') : wm === 'time' ? fmtDur(val * 60_000) : `${fmtNum(val)} kg`;
+            return { value, label: `Week of ${fmtDayMonth(weeks[i].start)}` };
+          }}
         />
       </div>
 
@@ -193,7 +211,15 @@ export function Stats() {
             )}
           </div>
         </div>
-        <LineChart points={durPts} height={160} baseline={avgDur / 60_000} onScrub={setDScrub} formatY={(m) => fmtDur(m * 60_000)} />
+        <LineChart
+          key={range}
+          points={durPts}
+          height={160}
+          baseline={avgDur / 60_000}
+          onScrub={setDScrub}
+          formatY={(m) => fmtDur(m * 60_000)}
+          tooltip={(i) => ({ value: fmtDur(v.cur[i].durationMs), label: fmtDate(v.cur[i].startedAt) })}
+        />
       </div>
 
       <div className="card stat-card">
@@ -232,25 +258,29 @@ export function Stats() {
           </div>
         </div>
         <BarChart
+          key={range}
           bars={v.wd.map((n, i) => ({ key: i, value: n, label: WEEKDAYS_SHORT[i] }))}
           height={120}
           current={topDay}
           showY={false}
           maxBar={26}
+          tooltip={(i) => ({ value: plural(v.wd[i], 'workout'), label: WEEKDAYS_PLURAL[i] })}
         />
       </div>
 
       {bw.length > 0 && (
-        <button className="card stat-card" onClick={() => nav.push({ name: 'bodyweight' })}>
-          <div className="card-label">
+        <div className="card stat-card">
+          <button className="card-label link-row" onClick={() => nav.push({ name: 'bodyweight' })}>
             Body weight <Icon name="chevronRight" size={16} className="dim" />
-          </div>
+          </button>
           <div className="chart-head">
             <div className="big">
-              <Num value={fmtBw(bw[bw.length - 1].kg)} unit="kg" />
+              <Num value={fmtBw((bwScrub !== null ? bw[bwScrub] : bw[bw.length - 1]).kg)} unit="kg" />
             </div>
             <div className="chart-sub">
-              {bw.length > 1 ? (
+              {bwScrub !== null ? (
+                <b>{fmtDate(parseDayKey(bw[bwScrub].date))}</b>
+              ) : bw.length > 1 ? (
                 <>
                   <Delta value={bw[bw.length - 1].kg - bw[0].kg} unit=" kg" neutral /> since {fmtDayMonth(parseDayKey(bw[0].date))}
                 </>
@@ -259,8 +289,16 @@ export function Stats() {
               )}
             </div>
           </div>
-          <LineChart points={bw.map((b) => ({ x: parseDayKey(b.date), y: b.kg }))} height={130} formatY={(x) => fmtNum(x, 1)} smooth={0.3} />
-        </button>
+          <LineChart
+            key={range}
+            points={bw.map((b) => ({ x: parseDayKey(b.date), y: b.kg }))}
+            height={140}
+            formatY={(x) => fmtNum(x, 1)}
+            dots="all"
+            onScrub={setBwScrub}
+            tooltip={(i) => ({ value: `${fmtBw(bw[i].kg)} kg`, label: fmtDate(parseDayKey(bw[i].date)) })}
+          />
+        </div>
       )}
     </div>
   );

@@ -27,12 +27,13 @@ const PUSH: Plan[] = [
   { id: 'bench-press', from: 70, to: 87.5, sets: 4, reps: [6, 8], step: 2.5 },
   { id: 'incline-db-press', from: 24, to: 32, sets: 3, reps: [8, 10], step: 2 },
   { id: 'overhead-press', from: 42.5, to: 52.5, sets: 3, reps: [6, 8], step: 2.5 },
+  { id: 'weighted-dip', from: 10, to: 22.5, sets: 3, reps: [8, 10], step: 2.5 },
   { id: 'lateral-raise', from: 10, to: 14, sets: 3, reps: [12, 15], step: 2 },
   { id: 'triceps-pushdown', from: 25, to: 37.5, sets: 3, reps: [10, 12], step: 2.5 },
 ];
 const PULL: Plan[] = [
   { id: 'deadlift', from: 120, to: 150, sets: 3, reps: [5, 5], step: 5 },
-  { id: 'pull-up', from: 0, to: 12.5, sets: 3, reps: [6, 9], step: 2.5 },
+  { id: 'weighted-pull-up', from: 5, to: 17.5, sets: 3, reps: [6, 8], step: 2.5 },
   { id: 'barbell-row', from: 60, to: 75, sets: 3, reps: [8, 8], step: 2.5 },
   { id: 'lat-pulldown', from: 55, to: 70, sets: 3, reps: [10, 12], step: 2.5 },
   { id: 'face-pull', from: 20, to: 27.5, sets: 3, reps: [15, 15], step: 2.5 },

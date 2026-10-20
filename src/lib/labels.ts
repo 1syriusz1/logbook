@@ -8,8 +8,10 @@ export function setText(s: Pick<SetLog, 'kg' | 'reps'>, ex?: Pick<Exercise, 'kin
   return `${fmtKg(s.kg)} × ${s.reps}`;
 }
 
-export function prLabel(kinds: PRKind[]): string {
-  if (kinds.includes('weight')) return 'Heaviest weight';
+export function prLabel(kinds: PRKind[], s?: Pick<SetLog, 'kg'>, ex?: Pick<Exercise, 'kind'>): string {
+  const bw = ex?.kind === 'bodyweight';
+  if (kinds.includes('weight')) return bw ? 'Heaviest added weight' : 'Heaviest weight';
   if (kinds.includes('e1rm')) return 'Best estimated 1RM';
+  if (bw && s && s.kg > 0) return `Most reps at +${fmtKg(s.kg)} kg`;
   return 'Most reps';
 }

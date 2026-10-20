@@ -38,6 +38,7 @@ export function sanitize(raw: unknown): DB {
       muscle: (['chest', 'back', 'shoulders', 'biceps', 'triceps', 'legs', 'core'].includes(str(e.muscle)) ? e.muscle : 'core') as Exercise['muscle'],
       equipment: (str(e.equipment) || 'other') as Exercise['equipment'],
       kind: e.kind === 'bodyweight' ? 'bodyweight' : 'weighted',
+      ...(e.loaded && e.kind === 'bodyweight' ? { loaded: true } : {}),
       ...(e.custom ? { custom: true } : {}),
       ...(e.archived ? { archived: true } : {}),
     }));
@@ -323,12 +324,22 @@ export function createPastWorkout(startedAt: number, durationMs: number): string
 
 export function createExercise(ex: Omit<Exercise, 'id' | 'custom'>): string {
   const id = 'c-' + uid();
-  update((d) => ({ ...d, exercises: [...d.exercises, { ...ex, id, custom: true }] }));
+  const clean: Exercise = { ...ex, id, custom: true };
+  if (!clean.loaded) delete clean.loaded;
+  update((d) => ({ ...d, exercises: [...d.exercises, clean] }));
   return id;
 }
 
 export function updateExercise(id: string, patch: Partial<Omit<Exercise, 'id'>>) {
-  update((d) => ({ ...d, exercises: d.exercises.map((e) => (e.id === id ? { ...e, ...patch } : e)) }));
+  update((d) => ({
+    ...d,
+    exercises: d.exercises.map((e) => {
+      if (e.id !== id) return e;
+      const next = { ...e, ...patch };
+      if (!next.loaded) delete next.loaded;
+      return next;
+    }),
+  }));
 }
 
 export function isExerciseUsed(d: DB, id: string) {

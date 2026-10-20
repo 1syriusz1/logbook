@@ -3,7 +3,7 @@ import type { Equipment, Exercise, ExerciseKind, Muscle } from '../lib/types';
 import { nav, type Layer } from '../lib/nav';
 import { useData } from '../lib/derived';
 import { addEntry, createExercise, getDB, isExerciseUsed, removeExercise, updateExercise } from '../lib/store';
-import { EQUIPMENT_LABEL, MUSCLE_LABEL, MUSCLES } from '../lib/exercises';
+import { EQUIPMENT_LABEL, equipmentLabel, MUSCLE_LABEL, MUSCLES } from '../lib/exercises';
 import { fmtRelDay } from '../lib/format';
 import { haptic } from '../lib/platform';
 import { Button, Chips, IconButton, Segmented } from '../components/ui';
@@ -17,7 +17,7 @@ const FILTERS: { value: Filter; label: string }[] = [{ value: 'all', label: 'All
 export function matches(e: Exercise, q: string): boolean {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
-  const hay = `${e.name} ${MUSCLE_LABEL[e.muscle]} ${EQUIPMENT_LABEL[e.equipment]}`.toLowerCase();
+  const hay = `${e.name} ${MUSCLE_LABEL[e.muscle]} ${equipmentLabel(e)} ${e.loaded ? 'weighted' : ''}`.toLowerCase();
   return words.every((w) => hay.includes(w));
 }
 
@@ -77,7 +77,7 @@ export function PickerSheet({ layer, workoutId }: { layer: Layer; workoutId: str
         <div className="row-main">
           <div className="row-title">{e.name}</div>
           <div className="row-sub">
-            {MUSCLE_LABEL[e.muscle]} · {EQUIPMENT_LABEL[e.equipment]}
+            {MUSCLE_LABEL[e.muscle]} · {equipmentLabel(e)}
             {u ? ` · ${fmtRelDay(u.last)}` : ''}
           </div>
         </div>
@@ -169,12 +169,19 @@ export function ExerciseForm({
   const [name, setName] = useState(existing?.name ?? titled);
   const [muscle, setMuscle] = useState<Muscle>(existing?.muscle ?? 'chest');
   const [equipment, setEquipment] = useState<Equipment>(existing?.equipment ?? 'barbell');
-  const [kind, setKind] = useState<ExerciseKind>(existing?.kind ?? 'weighted');
+  type Load = ExerciseKind | 'loaded';
+  const [load, setLoad] = useState<Load>(existing ? (existing.loaded ? 'loaded' : existing.kind) : 'weighted');
   const valid = name.trim().length > 0;
 
   const save = () => {
     if (!valid) return;
-    const payload = { name: name.trim(), muscle, equipment, kind };
+    const payload = {
+      name: name.trim(),
+      muscle,
+      equipment,
+      kind: (load === 'weighted' ? 'weighted' : 'bodyweight') as ExerciseKind,
+      loaded: load === 'loaded' ? true : undefined,
+    };
     if (existing) {
       updateExercise(existing.id, payload);
       nav.back();
@@ -255,7 +262,7 @@ export function ExerciseForm({
                 className={`chip${equipment === eq ? ' on' : ''}`}
                 onClick={() => {
                   setEquipment(eq);
-                  if (eq === 'bodyweight') setKind('bodyweight');
+                  if (eq === 'bodyweight' && load === 'weighted') setLoad('bodyweight');
                 }}
               >
                 {EQUIPMENT_LABEL[eq]}
@@ -267,13 +274,24 @@ export function ExerciseForm({
           <div className="field-label">What you log</div>
           <Segmented
             label="Load type"
-            value={kind}
-            onChange={setKind}
+            value={load}
+            onChange={(v) => {
+              setLoad(v);
+              if (v !== 'weighted' && equipment !== 'other') setEquipment('bodyweight');
+            }}
             options={[
-              { value: 'weighted', label: 'Weight × reps' },
-              { value: 'bodyweight', label: 'Bodyweight × reps' },
+              { value: 'weighted', label: 'Weight' },
+              { value: 'bodyweight', label: 'Bodyweight' },
+              { value: 'loaded', label: 'BW + kg' },
             ]}
           />
+          <div className="sub">
+            {load === 'weighted'
+              ? 'Log the weight on the bar or machine and the reps.'
+              : load === 'bodyweight'
+                ? 'Log reps. Extra weight is optional.'
+                : 'Bodyweight move with a belt or vest: log the added kg and reps.'}
+          </div>
         </div>
       </div>
     </Sheet>

@@ -26,7 +26,7 @@ export const EQUIPMENT_LABEL: Record<Equipment, string> = {
   other: 'Other',
 };
 
-type Def = [id: string, name: string, muscle: Muscle, equipment: Equipment, kind?: ExerciseKind];
+type Def = [id: string, name: string, muscle: Muscle, equipment: Equipment, kind?: ExerciseKind, loaded?: boolean];
 
 const DEFS: Def[] = [
   // Chest
@@ -42,10 +42,13 @@ const DEFS: Def[] = [
   ['smith-bench-press', 'Smith Machine Bench Press', 'chest', 'smith'],
   ['push-up', 'Push-up', 'chest', 'bodyweight', 'bodyweight'],
   ['chest-dip', 'Chest Dip', 'chest', 'bodyweight', 'bodyweight'],
+  ['weighted-dip', 'Weighted Dip', 'chest', 'bodyweight', 'bodyweight', true],
   // Back
   ['deadlift', 'Deadlift', 'back', 'barbell'],
   ['pull-up', 'Pull-up', 'back', 'bodyweight', 'bodyweight'],
   ['chin-up', 'Chin-up', 'back', 'bodyweight', 'bodyweight'],
+  ['weighted-pull-up', 'Weighted Pull-up', 'back', 'bodyweight', 'bodyweight', true],
+  ['weighted-chin-up', 'Weighted Chin-up', 'back', 'bodyweight', 'bodyweight', true],
   ['lat-pulldown', 'Lat Pulldown', 'back', 'cable'],
   ['close-grip-pulldown', 'Close-Grip Pulldown', 'back', 'cable'],
   ['barbell-row', 'Barbell Row', 'back', 'barbell'],
@@ -112,17 +115,23 @@ const DEFS: Def[] = [
   ['russian-twist', 'Russian Twist', 'core', 'other'],
 ];
 
-export const LIBRARY: Exercise[] = DEFS.map(([id, name, muscle, equipment, kind]) => ({
+export const LIBRARY: Exercise[] = DEFS.map(([id, name, muscle, equipment, kind, loaded]) => ({
   id,
   name,
   muscle,
   equipment,
   kind: kind ?? 'weighted',
+  ...(loaded ? { loaded: true } : {}),
 }));
+
+/** "Barbell", "Bodyweight", or "Bodyweight + kg" for weighted pull-ups and dips */
+export function equipmentLabel(ex: Pick<Exercise, 'equipment' | 'loaded'>): string {
+  return ex.loaded ? 'Bodyweight + kg' : EQUIPMENT_LABEL[ex.equipment];
+}
 
 /** Sensible first-time defaults for the set composer. */
 export function defaultLoad(ex: Exercise): { kg: number; reps: number } {
-  if (ex.kind === 'bodyweight') return { kg: 0, reps: 10 };
+  if (ex.kind === 'bodyweight') return ex.loaded ? { kg: 10, reps: 6 } : { kg: 0, reps: 10 };
   switch (ex.equipment) {
     case 'barbell':
     case 'smith':

@@ -35,7 +35,8 @@ function niceDomain(min: number, max: number, zero: boolean): { lo: number; hi: 
   const range = max - min;
   const mag = Math.pow(10, Math.floor(Math.log10(range / 4)));
   let best = { lo: 0, hi: 0, step: 1, score: Infinity };
-  for (const m of [1, 2, 2.5, 5, 10]) {
+  // 2.5 steps below 1 (0.25, 0.025) would need an extra decimal in the labels
+  for (const m of mag < 1 ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10]) {
     const step = m * mag;
     const lo = zero ? 0 : Math.floor(min / step) * step;
     const hi = Math.ceil(max / step) * step;
@@ -104,39 +105,80 @@ function timeTicks(x0: number, x1: number): { x: number; label: string }[] {
   return out;
 }
 
-/** Hold-and-drag (or tap) to inspect a point. Taps keep the selection briefly. */
+/**
+ * Picking a point. Mouse: hovering shows the nearest point. Touch: tap or drag
+ * sideways to select; the selection stays until you tap the same point again.
+ * A touch that turns into page scrolling leaves the previous selection as it was.
+ */
 function useScrub(count: number, indexAt: (clientX: number) => number, onScrub?: (i: number | null) => void) {
   const [active, setActive] = useState<number | null>(null);
-  const downAt = useRef(0);
-  const holdTimer = useRef<number | null>(null);
+  const current = useRef<number | null>(null);
+  const touch = useRef<{ before: number | null; x: number; moved: boolean } | null>(null);
   const set = (i: number | null) => {
+    if (i === current.current) return;
+    current.current = i;
     setActive(i);
     onScrub?.(i);
   };
-  useEffect(() => () => void (holdTimer.current && clearTimeout(holdTimer.current)), []);
   if (!count) return { active: null, handlers: {} };
   return {
     active,
     handlers: {
       onPointerDown: (e: RPointerEvent) => {
-        if (holdTimer.current) clearTimeout(holdTimer.current);
-        downAt.current = Date.now();
+        if (e.pointerType === 'mouse') return;
+        touch.current = { before: current.current, x: e.clientX, moved: false };
         set(indexAt(e.clientX));
       },
       onPointerMove: (e: RPointerEvent) => {
-        if (e.buttons) set(indexAt(e.clientX));
+        if (e.pointerType === 'mouse') return set(indexAt(e.clientX));
+        const t = touch.current;
+        if (!t) return;
+        if (Math.abs(e.clientX - t.x) > 6) t.moved = true;
+        set(indexAt(e.clientX));
       },
-      onPointerUp: () => {
-        const quick = Date.now() - downAt.current < 260;
-        if (quick) holdTimer.current = window.setTimeout(() => set(null), 2600);
-        else set(null);
+      onPointerUp: (e: RPointerEvent) => {
+        const t = touch.current;
+        touch.current = null;
+        if (!t || e.pointerType === 'mouse') return;
+        if (!t.moved && t.before !== null && t.before === indexAt(e.clientX)) set(null);
       },
-      onPointerCancel: () => set(null),
+      onPointerCancel: () => {
+        const t = touch.current;
+        touch.current = null;
+        if (t) set(t.before);
+      },
       onPointerLeave: (e: RPointerEvent) => {
         if (e.pointerType === 'mouse') set(null);
       },
     },
   };
+}
+
+export interface Tip {
+  value: string;
+  label?: string;
+}
+
+/** Floating value label next to the selected point, kept inside the chart. */
+function ChartTip({ tip, x, y, width }: { tip: Tip; x: number; y: number; width: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const left = Math.min(Math.max(x, w / 2 + 2), width - w / 2 - 2);
+    const top = y - h - 14 >= 0 ? y - h - 14 : y + 14;
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.style.visibility = 'visible';
+  });
+  return (
+    <div className="ch-tip" ref={ref} style={{ visibility: 'hidden' }} role="status">
+      <b>{tip.value}</b>
+      {tip.label && <span>{tip.label}</span>}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------ line chart */
@@ -153,12 +195,22 @@ interface LineChartProps {
   zero?: boolean;
   baseline?: number | null;
   onScrub?: (i: number | null) => void;
-  dots?: boolean;
-  /** draw an exponentially smoothed trend through noisy points (0–1, lower = smoother) */
-  smooth?: number;
+  /** true: dots while there are few points; 'all': a dot on every point (measurements) */
+  dots?: boolean | 'all';
+  /** text for the floating label of the selected point */
+  tooltip?: (i: number) => Tip;
 }
 
-export function LineChart({ points, height = 168, formatY = (v) => String(Math.round(v)), zero, baseline, onScrub, dots = true, smooth }: LineChartProps) {
+export function LineChart({
+  points,
+  height = 168,
+  formatY = (v) => String(Math.round(v)),
+  zero,
+  baseline,
+  onScrub,
+  dots = true,
+  tooltip,
+}: LineChartProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const gid = useId().replace(/:/g, '');
   const padR = 40;
@@ -180,22 +232,14 @@ export function LineChart({ points, height = 168, formatY = (v) => String(Math.r
     const yMin = Math.min(...ys, baseline ?? Infinity);
     const yMax = Math.max(...ys, baseline ?? -Infinity);
     const { lo, hi, step } = niceDomain(yMin, yMax, !!zero);
-    const inset = 6;
+    const inset = 8;
     const sx = (x: number) => inset + ((x - x0) / (x1 - x0)) * (plotW - inset * 2);
     const sy = (y: number) => padT + (1 - (y - lo) / (hi - lo || 1)) * plotH;
     const pts = points.map((p) => [sx(p.x), sy(p.y)] as [number, number]);
-    let trend = pts;
-    if (smooth) {
-      let acc = points[0].y;
-      trend = points.map((p, i) => {
-        acc = i === 0 ? p.y : acc + smooth * (p.y - acc);
-        return [sx(p.x), sy(acc)] as [number, number];
-      });
-    }
     const ticks: number[] = [];
     for (let v = lo; v <= hi + step / 1000; v += step) ticks.push(Math.round(v * 1e6) / 1e6);
-    return { pts, trend, sx, sy, ticks, x0, x1, lo };
-  }, [points, width, plotW, plotH, zero, baseline, smooth]);
+    return { pts, sx, sy, ticks, x0, x1, lo };
+  }, [points, width, plotW, plotH, zero, baseline]);
 
   const indexAt = (clientX: number) => {
     if (!geo || !ref.current) return 0;
@@ -214,12 +258,14 @@ export function LineChart({ points, height = 168, formatY = (v) => String(Math.r
   };
   const { active, handlers } = useScrub(points.length, indexAt, onScrub);
 
-  const line = geo ? monotonePath(geo.trend) : '';
+  const line = geo ? monotonePath(geo.pts) : '';
   const bottom = padT + plotH;
-  const area = geo && geo.trend.length > 1 ? `${line}L${geo.trend[geo.trend.length - 1][0]},${bottom}L${geo.trend[0][0]},${bottom}Z` : '';
+  const area = geo && geo.pts.length > 1 ? `${line}L${geo.pts[geo.pts.length - 1][0]},${bottom}L${geo.pts[0][0]},${bottom}Z` : '';
   const xt = geo ? timeTicks(geo.x0, geo.x1) : [];
   const last = geo ? geo.pts[geo.pts.length - 1] : null;
-  const showDots = smooth ? true : dots && points.length <= 24;
+  const showDots = dots === 'all' ? points.length <= 90 : dots && points.length <= 24;
+  const dotR = points.length > 40 ? 1.9 : 2.4;
+  const sel = active !== null && geo ? geo.pts[active] : null;
 
   return (
     <div className="chart" ref={ref} style={{ height }} {...handlers}>
@@ -254,24 +300,23 @@ export function LineChart({ points, height = 168, formatY = (v) => String(Math.r
           {area && <path d={area} fill={`url(#${gid})`} />}
           <path d={line} className="ch-line" fill="none" />
           {showDots &&
-            geo.pts.map(([x, y], i) =>
-              i === geo.pts.length - 1 ? null : <circle key={i} cx={x} cy={y} r={smooth ? 1.8 : 2.4} className={smooth ? 'ch-raw' : 'ch-dot'} />,
-            )}
-          {last && active === null && (
+            geo.pts.map(([x, y], i) => (i === geo.pts.length - 1 ? null : <circle key={i} cx={x} cy={y} r={dotR} className="ch-dot" />))}
+          {last && !sel && (
             <g>
               <circle cx={last[0]} cy={last[1]} r={7} className="ch-halo" />
               <circle cx={last[0]} cy={last[1]} r={3.6} className="ch-end" />
             </g>
           )}
-          {active !== null && geo.pts[active] && (
+          {sel && (
             <g>
-              <line x1={geo.pts[active][0]} x2={geo.pts[active][0]} y1={padT - 4} y2={bottom} className="ch-scrub" />
-              <circle cx={geo.pts[active][0]} cy={geo.pts[active][1]} r={7} className="ch-halo" />
-              <circle cx={geo.pts[active][0]} cy={geo.pts[active][1]} r={3.6} className="ch-end" />
+              <line x1={sel[0]} x2={sel[0]} y1={padT - 4} y2={bottom} className="ch-scrub" />
+              <circle cx={sel[0]} cy={sel[1]} r={8} className="ch-halo" />
+              <circle cx={sel[0]} cy={sel[1]} r={4} className="ch-end" />
             </g>
           )}
         </svg>
       )}
+      {sel && tooltip && active !== null && <ChartTip tip={tooltip(active)} x={sel[0]} y={sel[1]} width={width} />}
     </div>
   );
 }
@@ -294,9 +339,20 @@ interface BarChartProps {
   current?: number | null;
   maxBar?: number;
   showY?: boolean;
+  tooltip?: (i: number) => Tip;
 }
 
-export function BarChart({ bars, height = 150, formatY = (v) => String(Math.round(v)), onScrub, average, current = null, maxBar = 18, showY = true }: BarChartProps) {
+export function BarChart({
+  bars,
+  height = 150,
+  formatY = (v) => String(Math.round(v)),
+  onScrub,
+  average,
+  current = null,
+  maxBar = 18,
+  showY = true,
+  tooltip,
+}: BarChartProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const padR = showY ? 40 : 0;
   const padT = 10;
@@ -351,6 +407,14 @@ export function BarChart({ bars, height = 150, formatY = (v) => String(Math.roun
           })}
           {average != null && average > 0 && <line x1={0} x2={plotW} y1={sy(average)} y2={sy(average)} className="ch-avg" />}
         </svg>
+      )}
+      {width > 0 && tooltip && active !== null && bars[active] && (
+        <ChartTip
+          tip={tooltip(active)}
+          x={active * slot + slot / 2}
+          y={bottom - (bars[active].value > 0 ? Math.max(3, bottom - sy(bars[active].value)) : 2)}
+          width={width}
+        />
       )}
     </div>
   );

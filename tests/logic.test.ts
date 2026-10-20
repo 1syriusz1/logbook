@@ -1,7 +1,8 @@
 // Run with: npm test
 import assert from 'node:assert/strict';
 import { e1rm, computePRs, summarize, toExMap, exerciseSessions, exerciseRecords, heatThresholds, heatLevel, dayStats, weekStreak, autoTitle, weeklySeries, rangeStart } from '../src/lib/stats';
-import { LIBRARY } from '../src/lib/exercises';
+import { LIBRARY, defaultLoad, equipmentLabel } from '../src/lib/exercises';
+import { prLabel } from '../src/lib/labels';
 import { fmtNum, fmtClock, fmtDur, parseNum, startOfWeek, dayKey, fmtKg } from '../src/lib/format';
 import type { Workout } from '../src/lib/types';
 
@@ -38,6 +39,30 @@ assert.deepEqual(prs.get('s2-0-2'), ['e1rm'], '80x9 = 104 e1rm');
 assert.equal(prs.get('s3-0-0'), undefined, 'repeat of 85x5 is not a PR');
 assert.equal(prs.get('s3-1-0'), undefined, 'first pull-up session');
 assert.deepEqual(prs.get('s4-0-0'), ['reps'], 'more bodyweight reps');
+
+// weighted pull-ups: added-weight records and rep records at the same or heavier load
+const wp = [
+  w(14, [['weighted-pull-up', [[20, 6], [10, 10]]]]),
+  w(17, [['weighted-pull-up', [[10, 11], [25, 5], [20, 7], [10, 8]]]]),
+];
+const wprs = computePRs(wp, ex);
+assert.equal([...wprs.keys()].filter((k) => k.startsWith(`s${n - 1}-`)).length, 0, 'first weighted session sets the baseline');
+assert.deepEqual(wprs.get(`s${n}-0-0`), ['reps'], '+10 kg x 11 beats +10 kg x 10');
+assert.deepEqual(wprs.get(`s${n}-0-1`), ['weight', 'reps'], '+25 kg is the heaviest added load');
+assert.deepEqual(wprs.get(`s${n}-0-2`), ['reps'], '+20 kg x 7 beats +20 kg x 6');
+assert.equal(wprs.get(`s${n}-0-3`), undefined, '+10 kg x 8 is not a record');
+assert.equal(prLabel(['reps'], { kg: 20 }, { kind: 'bodyweight' }), 'Most reps at +20 kg');
+assert.equal(prLabel(['weight', 'reps'], { kg: 25 }, { kind: 'bodyweight' }), 'Heaviest added weight');
+assert.equal(prLabel(['reps'], { kg: 0 }, { kind: 'bodyweight' }), 'Most reps');
+assert.equal(prLabel(['weight'], { kg: 100 }, { kind: 'weighted' }), 'Heaviest weight');
+const wpu = LIBRARY.find((e) => e.id === 'weighted-pull-up')!;
+const wdip = LIBRARY.find((e) => e.id === 'weighted-dip')!;
+assert.ok(wpu.loaded && wpu.kind === 'bodyweight' && wpu.muscle === 'back');
+assert.ok(wdip.loaded && wdip.kind === 'bodyweight' && wdip.muscle === 'chest');
+assert.ok(LIBRARY.some((e) => e.id === 'weighted-chin-up' && e.loaded));
+assert.deepEqual(defaultLoad(wpu), { kg: 10, reps: 6 });
+assert.equal(equipmentLabel(wdip), 'Bodyweight + kg');
+assert.equal(new Set(LIBRARY.map((e) => e.id)).size, LIBRARY.length, 'library ids are unique');
 
 // sessions & records
 const sess = exerciseSessions(ws, 'bench-press');

@@ -20,6 +20,8 @@ export interface Exercise {
   muscle: Muscle;
   equipment: Equipment;
   kind: ExerciseKind;
+  /** bodyweight move usually done with extra load (weighted pull-up, weighted dip) */
+  loaded?: boolean;
   custom?: boolean;
   archived?: boolean;
 }

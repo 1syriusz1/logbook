@@ -254,7 +254,7 @@ export function Home() {
                   <div className="row-main">
                     <div className="row-title">{ex?.name}</div>
                     <div className="row-sub">
-                      {prLabel(r.kinds)} · {fmtDayMonth(r.at)}
+                      {prLabel(r.kinds, r, ex)} · {fmtDayMonth(r.at)}
                     </div>
                   </div>
                   <SetValue s={r} ex={ex} />

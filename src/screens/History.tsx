@@ -234,7 +234,7 @@ export function WorkoutDetail({ layer, id }: { layer: Layer; id: string }) {
                     <div key={x.id} className="set-row">
                       <span className="set-n">{i + 1}</span>
                       <SetValue s={x} ex={ex} />
-                      {kinds && <PRBadge title={prLabel(kinds)} />}
+                      {kinds && <PRBadge title={prLabel(kinds, x, ex)} />}
                     </div>
                   );
                 })}

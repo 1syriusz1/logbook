@@ -281,7 +281,7 @@ function EntryCard({
             >
               <span className="set-n">{i + 1}</span>
               <SetValue s={s} ex={ex} />
-              {prs.get(s.id) && <PRBadge title={prLabel(prs.get(s.id)!)} />}
+              {prs.get(s.id) && <PRBadge title={prLabel(prs.get(s.id)!, s, ex)} />}
             </button>
           ))}
         </div>
@@ -489,7 +489,7 @@ export function SummarySheet({ layer, id }: { layer: Layer; id: string }) {
                   <PRBadge />
                   <div className="row-main">
                     <div className="row-title">{ex?.name}</div>
-                    <div className="row-sub">{prLabel(r.kinds)}</div>
+                    <div className="row-sub">{prLabel(r.kinds, r, ex)}</div>
                   </div>
                   <SetValue s={r} ex={ex} />
                 </div>

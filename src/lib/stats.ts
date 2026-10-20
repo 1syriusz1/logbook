@@ -118,6 +118,15 @@ interface Best {
   kg: number;
   e1rm: number;
   reps: number;
+  /** bodyweight moves: best reps seen at each added load */
+  repsAt: Map<number, number>;
+}
+
+/** Most reps done so far with at least this much added load. */
+function repsAtOrAbove(b: Best, kg: number): number {
+  let best = 0;
+  for (const [load, reps] of b.repsAt) if (load >= kg - 1e-9 && reps > best) best = reps;
+  return best;
 }
 
 /**
@@ -136,7 +145,7 @@ export function computePRs(workouts: Workout[], ex: ExMap): Map<string, PRKind[]
       if (!exercise) continue;
       let b = best.get(entry.exerciseId);
       if (!b) {
-        b = { sessions: 0, kg: 0, e1rm: 0, reps: 0 };
+        b = { sessions: 0, kg: 0, e1rm: 0, reps: 0, repsAt: new Map() };
         best.set(entry.exerciseId, b);
       }
       for (const s of entry.sets) {
@@ -147,14 +156,18 @@ export function computePRs(workouts: Workout[], ex: ExMap): Map<string, PRKind[]
             if (s.kg > b.kg + 1e-9) kinds.push('weight');
             if (est > b.e1rm + 0.05) kinds.push('e1rm');
           } else {
-            if (s.reps > b.reps) kinds.push('reps');
+            // Bodyweight (incl. weighted pull-ups/dips): a rep record counts at the
+            // same or heavier added load, so +10 kg × 10 doesn't "beat" +25 kg × 6.
             if (s.kg > 0 && s.kg > b.kg + 1e-9) kinds.push('weight');
+            if (s.reps > repsAtOrAbove(b, s.kg)) kinds.push('reps');
           }
         }
         if (kinds.length) out.set(s.id, kinds);
         b.kg = Math.max(b.kg, s.kg);
         b.e1rm = Math.max(b.e1rm, est);
         b.reps = Math.max(b.reps, s.reps);
+        const load = Math.round(s.kg * 100) / 100;
+        b.repsAt.set(load, Math.max(b.repsAt.get(load) ?? 0, s.reps));
       }
       if (entry.sets.length) seen.add(entry.exerciseId);
     }
