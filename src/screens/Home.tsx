@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { nav } from '../lib/nav';
-import { useData, useNow } from '../lib/derived';
+import { heatCaption, useData, useNow } from '../lib/derived';
 import { collapsePRs, prEvents, sortedBodyweight, summarize, totals, weekStreak } from '../lib/stats';
 import {
   addDays,
@@ -45,6 +45,7 @@ export function Home() {
 
   const streak = useMemo(() => weekStreak(summaries), [summaries]);
   const last = summaries[summaries.length - 1];
+  const lastHeart = last ? data.heart.get(last.id) : undefined;
 
   const avg30 = useMemo(() => {
     const recent = summaries.filter((s) => s.startedAt > Date.now() - 30 * DAY);
@@ -175,7 +176,7 @@ export function Home() {
             <span className="muted">{streak > 1 ? `${streak}-week streak` : has ? plural(summaries.length, 'workout') : ''}</span>
           </div>
           <div className="heat-wrap">
-            <Heatmap days={data.days} thresholds={data.thresholds} selected={picked} onSelect={setPicked} />
+            <Heatmap levels={data.levels} selected={picked} onSelect={setPicked} />
           </div>
           <div className="card-foot">
             {pickedDay ? (
@@ -193,7 +194,7 @@ export function Home() {
               </span>
             ) : (
               <>
-                <span>{has ? 'Shade shows sets per day' : 'Each workout fills a square'}</span>
+                <span>{has ? heatCaption(data.heat) : 'Each workout fills a square'}</span>
                 <HeatLegend />
               </>
             )}
@@ -210,6 +211,7 @@ export function Home() {
               <div className="lw-title">{last.title}</div>
               <div className="sub">
                 {fmtRelDay(last.startedAt)} · {fmtDur(last.durationMs)}
+                {lastHeart?.kcal != null ? ` · ${fmtNum(lastHeart.kcal)} kcal` : ''}
               </div>
             </button>
 

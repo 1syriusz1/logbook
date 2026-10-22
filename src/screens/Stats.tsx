@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { nav } from '../lib/nav';
-import { useData } from '../lib/derived';
+import { heatCaption, useData } from '../lib/derived';
 import { inRange, muscleSplit, RANGES, rangeStart, sortedBodyweight, totals, weekdayCounts, weeklySeries, type RangeKey } from '../lib/stats';
 import { MUSCLE_LABEL } from '../lib/exercises';
 import {
@@ -13,6 +13,7 @@ import {
   fmtNum,
   parseDayKey,
   plural,
+  startOfWeek,
   WEEKDAYS_PLURAL,
   WEEKDAYS_SHORT,
 } from '../lib/format';
@@ -22,6 +23,7 @@ import { DurNum } from '../components/bits';
 import { Icon } from '../components/icons';
 
 type WeekMetric = 'sets' | 'workouts' | 'time' | 'volume';
+type HeartMetric = 'kcal' | 'load' | 'hr';
 
 const RANGE_LABEL: Record<RangeKey, string> = {
   '1m': 'Last month',
@@ -49,6 +51,8 @@ export function Stats() {
   const [wScrub, setWScrub] = useState<number | null>(null);
   const [dScrub, setDScrub] = useState<number | null>(null);
   const [bwScrub, setBwScrub] = useState<number | null>(null);
+  const [hm, setHm] = useState<HeartMetric>('kcal');
+  const [hScrub, setHScrub] = useState<number | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const { summaries } = data;
   const now = Date.now();
@@ -72,6 +76,30 @@ export function Stats() {
   }, [summaries, range]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bw = useMemo(() => sortedBodyweight(data.db.bodyweight).filter((b) => parseDayKey(b.date) >= v.from), [data.db.bodyweight, v.from]);
+
+  // Heart rate and calories for the workouts that have them.
+  const hv = useMemo(() => {
+    const pick = (list: typeof v.cur) => list.flatMap((s) => (data.heart.has(s.id) ? [{ s, h: data.heart.get(s.id)! }] : []));
+    const cur = pick(v.cur);
+    const prev = pick(v.prev);
+    const kcalOf = (l: typeof cur) => l.reduce((a, x) => a + (x.h.kcal ?? 0), 0);
+    const kcalN = cur.filter((x) => x.h.kcal != null).length;
+    const weeks = v.weeks.map((wk) => {
+      const items = cur.filter((x) => startOfWeek(x.s.startedAt) === wk.start);
+      return { start: wk.start, n: items.length, kcal: kcalOf(items), load: items.reduce((a, x) => a + x.h.load, 0) };
+    });
+    return {
+      cur,
+      kcal: kcalOf(cur),
+      kcalN,
+      prevKcal: prev.some((x) => x.h.kcal != null) ? kcalOf(prev) : 0,
+      avgHr: cur.length ? cur.reduce((a, x) => a + x.h.avg, 0) / cur.length : 0,
+      prevAvgHr: prev.length ? prev.reduce((a, x) => a + x.h.avg, 0) / prev.length : 0,
+      peak: cur.reduce((m, x) => Math.max(m, x.h.max), 0),
+      load: cur.reduce((a, x) => a + x.h.load, 0),
+      weeks,
+    };
+  }, [v, data.heart]);
 
   if (!summaries.length) {
     return (
@@ -126,6 +154,7 @@ export function Stats() {
           setWScrub(null);
           setDScrub(null);
           setBwScrub(null);
+          setHScrub(null);
         }}
         options={RANGES}
       />
@@ -135,14 +164,31 @@ export function Stats() {
         <TotalCard label="Time" value={<DurNum ms={T.durationMs} />} delta={pct(T.durationMs, P.durationMs)} sub={`${fmtDur(avgDur)} per session`} />
         <TotalCard label="Sets" value={<Num value={fmtNum(T.sets)} />} delta={pct(T.sets, P.sets)} sub={`${fmtNum(T.sets / Math.max(1, T.workouts), 1)} per workout`} />
         <TotalCard label="Volume" value={<Num value={fmtCompact(T.volume)} unit="kg" />} delta={pct(T.volume, P.volume)} sub={`${fmtNum(T.volume / Math.max(1, T.workouts))} kg per workout`} />
+        {hv.cur.length > 0 && (
+          <>
+            <TotalCard
+              label="Calories"
+              value={hv.kcalN ? <Num value={fmtCompact(hv.kcal)} unit="kcal" /> : <Num value="–" />}
+              delta={hv.kcalN ? pct(hv.kcal, hv.prevKcal) : null}
+              sub={hv.kcalN ? `${fmtNum(hv.kcal / hv.kcalN)} per workout` : 'No calorie data yet'}
+            />
+            <TotalCard
+              label="Heart rate"
+              value={<Num value={fmtNum(hv.avgHr)} unit="bpm" />}
+              delta={null}
+              sub={`Average · peak ${fmtNum(hv.peak)} bpm`}
+            />
+          </>
+        )}
       </div>
 
       <div className="card stat-card">
         <div className="card-label">
           Consistency <HeatLegend />
         </div>
+        {data.heat.hrDays > 0 && <div className="heat-what">{heatCaption(data.heat)}</div>}
         <div className="heat-wrap">
-          <Heatmap days={data.days} thresholds={data.thresholds} weeks={heatWeeks} cell={14} gap={3} scrollable selected={picked} onSelect={setPicked} />
+          <Heatmap levels={data.levels} weeks={heatWeeks} cell={14} gap={3} scrollable selected={picked} onSelect={setPicked} />
         </div>
         <div className="card-foot">
           {pickedDay ? (
@@ -221,6 +267,90 @@ export function Stats() {
           tooltip={(i) => ({ value: fmtDur(v.cur[i].durationMs), label: fmtDate(v.cur[i].startedAt) })}
         />
       </div>
+
+      {hv.cur.length > 0 && (
+        <div className="card stat-card">
+          <div className="card-label">
+            Heart rate <span className="muted">{plural(hv.cur.length, 'workout')} with data</span>
+          </div>
+          <Segmented
+            label="Heart metric"
+            size="sm"
+            value={hm}
+            onChange={(m) => {
+              setHm(m);
+              setHScrub(null);
+            }}
+            options={[
+              { value: 'kcal', label: 'Calories' },
+              { value: 'load', label: 'Load' },
+              { value: 'hr', label: 'Avg HR' },
+            ]}
+          />
+          {hm === 'hr' ? (
+            <>
+              <div className="chart-head">
+                <div className="big">
+                  <Num value={fmtNum(hScrub !== null && hv.cur[hScrub] ? hv.cur[hScrub].h.avg : hv.avgHr)} unit="bpm" />
+                </div>
+                <div className="chart-sub">
+                  {hScrub !== null && hv.cur[hScrub] ? (
+                    <>
+                      <b>{fmtDate(hv.cur[hScrub].s.startedAt)}</b> · {hv.cur[hScrub].s.title} · peak {hv.cur[hScrub].h.max}
+                    </>
+                  ) : (
+                    <>Average per workout · dashed line</>
+                  )}
+                </div>
+              </div>
+              <LineChart
+                key={`${range}-hr`}
+                points={hv.cur.map((x) => ({ x: x.s.startedAt, y: x.h.avg }))}
+                height={150}
+                baseline={hv.avgHr}
+                onScrub={setHScrub}
+                tooltip={(i) => ({ value: `${hv.cur[i].h.avg} bpm`, label: `${fmtDate(hv.cur[i].s.startedAt)} · peak ${hv.cur[i].h.max}` })}
+              />
+            </>
+          ) : (
+            (() => {
+              const key = hm === 'kcal' ? 'kcal' : 'load';
+              const withData = hv.weeks.filter((w) => w.n > 0);
+              const avg = withData.length ? withData.reduce((a, w) => a + w[key], 0) / withData.length : 0;
+              const focus = hScrub !== null ? hv.weeks[hScrub] : null;
+              const unit = hm === 'kcal' ? ' kcal' : '';
+              return (
+                <>
+                  <div className="chart-head">
+                    <div className="big">
+                      <Num value={fmtNum(focus ? focus[key] : avg)} unit={hm === 'kcal' ? 'kcal' : undefined} />
+                    </div>
+                    <div className="chart-sub">
+                      {focus ? (
+                        <>
+                          Week of <b>{fmtDayMonth(focus.start)}</b> · {plural(focus.n, 'workout')} with heart rate
+                        </>
+                      ) : (
+                        <>Weekly average over weeks with heart rate · dashed line</>
+                      )}
+                    </div>
+                  </div>
+                  <BarChart
+                    key={`${range}-${hm}`}
+                    bars={hv.weeks.map((w) => ({ key: w.start, value: w[key], label: fmtDayMonth(w.start) }))}
+                    height={150}
+                    average={avg}
+                    current={hv.weeks.length - 1}
+                    onScrub={setHScrub}
+                    formatY={(x) => fmtCompact(x)}
+                    tooltip={(i) => ({ value: `${fmtNum(hv.weeks[i][key])}${unit}`, label: `Week of ${fmtDayMonth(hv.weeks[i].start)}` })}
+                  />
+                </>
+              );
+            })()
+          )}
+        </div>
+      )}
 
       <div className="card stat-card">
         <div className="card-label">

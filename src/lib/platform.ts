@@ -130,6 +130,14 @@ export function onAppPause(fn: () => void): () => void {
   };
 }
 
+export function onAppResume(fn: () => void): () => void {
+  if (!isNative) return () => {};
+  const p = App.addListener('resume', fn);
+  return () => {
+    p.then((h) => h.remove()).catch(() => {});
+  };
+}
+
 /** Ask the browser not to evict our storage (web/PWA only). */
 export function requestPersistentStorage() {
   if (isNative) return;

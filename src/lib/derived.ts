@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { DB, Exercise, Workout } from './types';
+import type { DB, Exercise, HeatMetric, Workout } from './types';
 import { useDB } from './store';
 import {
   allSessions,
   computePRs,
   dayStats,
-  heatThresholds,
   summarize,
   toExMap,
   type DayStat,
@@ -14,6 +13,9 @@ import {
   type Session,
   type WorkoutSummary,
 } from './stats';
+import { heartView, heatLevels, type HeartView, type HeatInfo } from './heart';
+
+export { heatCaption, type HeatInfo } from './heart';
 
 export interface Derived {
   db: DB;
@@ -24,9 +26,13 @@ export interface Derived {
   byId: Map<string, WorkoutSummary>;
   prs: Map<string, PRKind[]>;
   days: Map<string, DayStat>;
-  thresholds: [number, number, number];
   /** exerciseId → finished sessions, oldest first */
   sessions: Map<string, Session[]>;
+  /** workoutId → heart rate, for finished workouts that have samples */
+  heart: Map<string, HeartView>;
+  /** dayKey → heat level 0–4 */
+  levels: Map<string, number>;
+  heat: HeatInfo;
   active: Workout | null;
 }
 
@@ -34,7 +40,11 @@ let lastExercises: Exercise[] | null = null;
 let lastEx: ExMap = new Map();
 let lastWorkouts: Workout[] | null = null;
 let lastWorkoutsEx: ExMap | null = null;
-let lastPart: Omit<Derived, 'db' | 'ex' | 'active'> | null = null;
+let lastPart: Omit<Derived, 'db' | 'ex' | 'active' | 'heart' | 'levels' | 'heat'> | null = null;
+let lastHeartKey: [Workout[], number] | null = null;
+let lastHeart = new Map<string, HeartView>();
+let lastHeatKey: [unknown, unknown, HeatMetric] | null = null;
+let lastHeat: { levels: Map<string, number>; info: HeatInfo } = { levels: new Map(), info: { metric: 'sets', hrDays: 0, fallbackDays: 0 } };
 
 export function derive(db: DB): Derived {
   if (db.exercises !== lastExercises) {
@@ -54,12 +64,24 @@ export function derive(db: DB): Derived {
       byId: new Map(summaries.map((s) => [s.id, s])),
       prs: computePRs(db.workouts, ex),
       days,
-      thresholds: heatThresholds(days),
       sessions: allSessions(finished),
     };
   }
+  const { hrMax, heatMetric } = db.settings;
+  if (!lastHeartKey || lastHeartKey[0] !== db.workouts || lastHeartKey[1] !== hrMax) {
+    lastHeartKey = [db.workouts, hrMax];
+    lastHeart = new Map();
+    for (const w of lastPart.finished) {
+      const v = heartView(w.hr, hrMax);
+      if (v) lastHeart.set(w.id, v);
+    }
+  }
+  if (!lastHeatKey || lastHeatKey[0] !== lastPart.days || lastHeatKey[1] !== lastHeart || lastHeatKey[2] !== heatMetric) {
+    lastHeatKey = [lastPart.days, lastHeart, heatMetric];
+    lastHeat = heatLevels(lastPart.days, lastHeart, heatMetric);
+  }
   const active = db.activeId ? db.workouts.find((w) => w.id === db.activeId && w.endedAt === null) ?? null : null;
-  return { db, ex, active, ...lastPart };
+  return { db, ex, active, ...lastPart, heart: lastHeart, levels: lastHeat.levels, heat: lastHeat.info };
 }
 
 export function useData(): Derived {

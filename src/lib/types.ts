@@ -40,6 +40,25 @@ export interface Entry {
   sets: SetLog[];
 }
 
+/** Heart rate read from Health Connect for the time of a workout. */
+export interface HeartData {
+  /** when it was read (epoch ms) */
+  at: number;
+  /** samples found inside the workout; 0 = nothing was recorded */
+  n: number;
+  /** where the samples came from, e.g. "Google Health" */
+  src?: string;
+  avg?: number;
+  max?: number;
+  min?: number;
+  /** total calories burned during the workout */
+  kcal?: number;
+  /** share of the workout covered by samples, 0–1 */
+  cover?: number;
+  /** downsampled series, "offsetSeconds:bpm,offsetSeconds:bpm,…" */
+  pts?: string;
+}
+
 export interface Workout {
   id: string;
   startedAt: number;
@@ -48,6 +67,7 @@ export interface Workout {
   name?: string;
   note?: string;
   entries: Entry[];
+  hr?: HeartData;
 }
 
 export interface BodyWeightLog {
@@ -57,9 +77,26 @@ export interface BodyWeightLog {
   kg: number;
 }
 
+/** What the brightness of a heatmap square stands for. */
+export type HeatMetric = 'sets' | 'load' | 'kcal';
+
+export interface HealthSettings {
+  /** reading heart rate from Health Connect is switched on */
+  on: boolean;
+  /** first time access was granted; without history access reads reach 30 days before it */
+  since: number | null;
+  /** access to data older than that was granted too */
+  history: boolean;
+  lastSync: number | null;
+}
+
 export interface Settings {
   weightStep: number;
   lastBackupAt: number | null;
+  /** max heart rate in bpm, for zones and load */
+  hrMax: number;
+  heatMetric: HeatMetric;
+  health: HealthSettings;
 }
 
 export interface DB {

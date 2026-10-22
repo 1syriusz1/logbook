@@ -1,7 +1,6 @@
 /* Hand-drawn SVG charts. Monochrome: value is carried by lightness. */
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { addDays, dayKey, DAY, fmtDayMonth, fmtMonth, startOfDay, startOfWeek, WEEKDAYS_SHORT } from '../lib/format';
-import { heatLevel, type DayStat } from '../lib/stats';
 
 /* ------------------------------------------------------------ utils */
 
@@ -423,8 +422,8 @@ export function BarChart({
 /* ------------------------------------------------------------ heatmap */
 
 interface HeatmapProps {
-  days: Map<string, DayStat>;
-  thresholds: [number, number, number];
+  /** dayKey → level 0–4 */
+  levels: Map<string, number>;
   /** at least this many week columns; the map always fills the available width */
   weeks?: number;
   cell?: number;
@@ -434,7 +433,7 @@ interface HeatmapProps {
   scrollable?: boolean;
 }
 
-export function Heatmap({ days, thresholds, weeks, cell = 14, gap = 3, selected, onSelect, scrollable }: HeatmapProps) {
+export function Heatmap({ levels, weeks, cell = 14, gap = 3, selected, onSelect, scrollable }: HeatmapProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const scroller = useRef<HTMLDivElement>(null);
   const labelW = 26;
@@ -459,12 +458,11 @@ export function Heatmap({ days, thresholds, weeks, cell = 14, gap = 3, selected,
     for (let r = 0; r < 7; r++) {
       const d = addDays(monday, r);
       const key = dayKey(d);
-      const stat = days.get(key);
       cells.push({
         key,
         x: labelW + c * (cell + gap),
         y: topH + r * (cell + gap),
-        level: heatLevel(stat?.sets ?? 0, thresholds),
+        level: levels.get(key) ?? 0,
         future: d > today,
         today: d === today,
       });
@@ -576,3 +574,182 @@ export function SplitBar({ parts }: { parts: { key: string; value: number }[] })
 }
 
 export const splitTone = (i: number) => SPLIT_TONES[i % SPLIT_TONES.length];
+
+/* ------------------------------------------------------------ heart rate over a workout */
+
+export interface HeartBand {
+  /** seconds from the workout start */
+  start: number;
+  end: number;
+  /** index of the exercise in the workout */
+  entry: number;
+  /** number printed above the band */
+  n: number;
+}
+
+interface HeartChartProps {
+  /** [seconds from start, bpm] */
+  pts: [number, number][];
+  /** workout length in seconds */
+  duration: number;
+  bands: HeartBand[];
+  /** set times, seconds from start */
+  sets: number[];
+  height?: number;
+  /** exercise (entry index) to highlight */
+  focus?: number | null;
+  onScrub?: (i: number | null) => void;
+  tooltip?: (i: number) => Tip;
+}
+
+const elapsed = (sec: number) => {
+  const m = Math.round(sec / 60);
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+};
+
+/**
+ * Heart rate across a workout. Exercises sit behind the line as alternating
+ * bands, numbered like the list below the chart; ticks on the floor mark sets.
+ */
+export function HeartChart({ pts, duration, bands, sets, height = 196, focus = null, onScrub, tooltip }: HeartChartProps) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const gid = useId().replace(/:/g, '');
+  const padR = 34;
+  const padT = 16;
+  const padB = 22;
+  const plotW = Math.max(0, width - padR);
+  const plotH = height - padT - padB;
+  const bottom = padT + plotH;
+
+  const geo = useMemo(() => {
+    if (!pts.length || !width) return null;
+    const dur = Math.max(duration, pts[pts.length - 1][0], 60);
+    const sx = (t: number) => Math.min(plotW, Math.max(0, (t / dur) * plotW));
+    const bpm = pts.map((p) => p[1]);
+    const { lo, hi, step } = niceDomain(Math.min(...bpm), Math.max(...bpm), false);
+    const sy = (b: number) => padT + (1 - (b - lo) / (hi - lo || 1)) * plotH;
+    const xy = pts.map(([t, b]) => [sx(t), sy(b)] as [number, number]);
+    // Break the line where the band recorded nothing for a while.
+    const diffs = pts.slice(1).map((p, i) => p[0] - pts[i][0]).sort((a, b) => a - b);
+    const gap = Math.max(120, (diffs[Math.floor(diffs.length / 2)] ?? 10) * 4);
+    const segs: [number, number][][] = [[]];
+    pts.forEach((p, i) => {
+      if (i && p[0] - pts[i - 1][0] > gap) segs.push([]);
+      segs[segs.length - 1].push(xy[i]);
+    });
+    const ticks: number[] = [];
+    for (let v = lo; v <= hi + step / 1000; v += step) ticks.push(Math.round(v));
+    const stepMin = [5, 10, 15, 20, 30, 60, 120].find((m) => dur / 60 / m <= 4.5) ?? 240;
+    const xt: number[] = [];
+    for (let s = 0; s <= dur; s += stepMin * 60) xt.push(s);
+    let peak = 0;
+    bpm.forEach((b, i) => b > bpm[peak] && (peak = i));
+    return { sx, sy, xy, segs, ticks, xt, peak };
+  }, [pts, duration, width, plotW, plotH]);
+
+  const indexAt = (clientX: number) => {
+    if (!geo || !ref.current) return 0;
+    const x = clientX - ref.current.getBoundingClientRect().left;
+    let lo = 0;
+    let hi = geo.xy.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (geo.xy[mid][0] < x) lo = mid;
+      else hi = mid;
+    }
+    return Math.abs(geo.xy[lo][0] - x) <= Math.abs(geo.xy[hi][0] - x) ? lo : hi;
+  };
+  const { active, handlers } = useScrub(pts.length, indexAt, onScrub);
+  const sel = active !== null && geo ? geo.xy[active] : null;
+  const selT = active !== null ? pts[active]?.[0] : null;
+  const activeEntry =
+    selT != null ? bands.find((b) => selT > b.start && selT <= b.end)?.entry ?? (bands[0] && selT <= bands[0].start ? bands[0].entry : null) : focus;
+
+  return (
+    <div className="chart" ref={ref} style={{ height }} {...handlers}>
+      {geo && (
+        <svg width={width} height={height} className="chart-svg">
+          <defs>
+            <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" className="ch-stop" stopOpacity="0.18" />
+              <stop offset="1" className="ch-stop" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {bands.map((b, i) => {
+            const x = geo.sx(b.start);
+            const w = Math.max(1, geo.sx(b.end) - x);
+            const on = activeEntry === b.entry;
+            return (
+              <g key={i}>
+                <rect x={x} y={padT} width={w} height={plotH} className={`hb-band${i % 2 ? ' alt' : ''}${on ? ' on' : ''}`} />
+                {w >= 13 && (
+                  <text x={x + w / 2} y={padT - 5} textAnchor="middle" className={`hb-num${on ? ' on' : ''}`}>
+                    {b.n}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          {geo.ticks.map((v) => (
+            <g key={v}>
+              <line x1={0} x2={plotW} y1={geo.sy(v)} y2={geo.sy(v)} className="ch-grid" />
+              <text x={width - 2} y={geo.sy(v) + 3.5} textAnchor="end" className="ch-label">
+                {v}
+              </text>
+            </g>
+          ))}
+          {geo.xt.map((s) => {
+            const x = geo.sx(s);
+            if (x > plotW - 14) return null;
+            return (
+              <text key={s} x={Math.max(x, 0)} y={height - 6} textAnchor={s === 0 ? 'start' : 'middle'} className="ch-label">
+                {elapsed(s)}
+              </text>
+            );
+          })}
+          {sets.map((s, i) => {
+            const x = geo.sx(s);
+            const on = activeEntry !== null && bands.some((b) => b.entry === activeEntry && s > b.start && s <= b.end);
+            return <line key={i} x1={x} x2={x} y1={bottom} y2={bottom - 5} className={`hb-set${on ? ' on' : ''}`} />;
+          })}
+          {geo.segs.map((seg, i) =>
+            seg.length > 1 ? (
+              <g key={i}>
+                <path d={`${monotonePath(seg)}L${seg[seg.length - 1][0]},${bottom}L${seg[0][0]},${bottom}Z`} fill={`url(#${gid})`} />
+                <path d={monotonePath(seg)} className="ch-line hb-line" fill="none" />
+              </g>
+            ) : seg.length === 1 ? (
+              <circle key={i} cx={seg[0][0]} cy={seg[0][1]} r={1.6} className="ch-end" />
+            ) : null,
+          )}
+          {!sel && (
+            <circle cx={geo.xy[geo.peak][0]} cy={geo.xy[geo.peak][1]} r={3.2} className="hb-peak" />
+          )}
+          {sel && (
+            <g>
+              <line x1={sel[0]} x2={sel[0]} y1={padT} y2={bottom} className="ch-scrub" />
+              <circle cx={sel[0]} cy={sel[1]} r={8} className="ch-halo" />
+              <circle cx={sel[0]} cy={sel[1]} r={4} className="ch-end" />
+            </g>
+          )}
+        </svg>
+      )}
+      {sel && tooltip && active !== null && <ChartTip tip={tooltip(active)} x={sel[0]} y={sel[1]} width={width} />}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ zones */
+
+/** below Z1, Z1 … Z5: darker to brighter */
+export const zoneTone = (z: number) => `zt${Math.max(0, Math.min(5, z))}`;
+
+export function ZoneBar({ zones }: { zones: number[] }) {
+  const total = zones.reduce((a, b) => a + b, 0);
+  if (!total) return null;
+  return (
+    <div className="split zone-split" role="img" aria-label="Time in heart-rate zones">
+      {zones.map((s, z) => (s > 0 ? <span key={z} className={`split-seg ${zoneTone(z)}`} style={{ flexGrow: s / total }} /> : null))}
+    </div>
+  );
+}

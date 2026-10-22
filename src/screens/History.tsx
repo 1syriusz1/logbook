@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'r
 import { nav, toast, type Layer } from '../lib/nav';
 import { useData } from '../lib/derived';
 import { createPastWorkout, deleteWorkout, getDB, replaceDB, updateWorkout } from '../lib/store';
-import { heatLevel, totals } from '../lib/stats';
+import { totals } from '../lib/stats';
 import { MUSCLE_LABEL } from '../lib/exercises';
 import {
   addDays,
@@ -28,6 +28,7 @@ import { Button, Empty, IconButton, Num, PRBadge, Stepper } from '../components/
 import { Icon } from '../components/icons';
 import { Page, Sheet } from '../components/layers';
 import { DurNum, MuscleSplit, SetValue, StatRow } from '../components/bits';
+import { HeartCard, HeartPending } from '../components/heart';
 
 /* ------------------------------------------------------------ history tab */
 
@@ -97,7 +98,7 @@ export function History() {
           {days.map((ts, i) => {
             if (ts === null) return <span key={'b' + i} />;
             const stat = data.days.get(dayKey(ts));
-            const level = heatLevel(stat?.sets ?? 0, data.thresholds);
+            const level = data.levels.get(dayKey(ts)) ?? 0;
             const future = ts > today;
             return (
               <button
@@ -176,6 +177,7 @@ export function WorkoutDetail({ layer, id }: { layer: Layer; id: string }) {
   const data = useData();
   const s = data.byId.get(id);
   const w = data.finished.find((x) => x.id === id);
+  const heart = data.heart.get(id);
   if (!s || !w) {
     return (
       <Page layer={layer}>
@@ -200,6 +202,8 @@ export function WorkoutDetail({ layer, id }: { layer: Layer; id: string }) {
           { label: 'Volume', value: <Num value={fmtNum(s.volume)} unit="kg" /> },
         ]}
       />
+
+      {heart ? <HeartCard w={w} view={heart} ex={data.ex} hrMax={data.db.settings.hrMax} /> : <HeartPending w={w} />}
 
       {s.muscles.length > 0 && (
         <div className="card detail-card">

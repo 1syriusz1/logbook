@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { BodyWeightLog, DB, Entry, Exercise, Settings, Workout } from './types';
+import type { BodyWeightLog, DB, Entry, Exercise, HealthSettings, HeartData, Settings, Workout } from './types';
 import { LIBRARY } from './exercises';
 import { nativeFile } from './platform';
 
@@ -8,6 +8,8 @@ const KEY = 'logbook.v1';
 export const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+export const defaultHealth = (): HealthSettings => ({ on: false, since: null, history: false, lastSync: null });
+
 export function emptyDB(): DB {
   return {
     v: 1,
@@ -15,7 +17,7 @@ export function emptyDB(): DB {
     workouts: [],
     bodyweight: [],
     activeId: null,
-    settings: { weightStep: 2.5, lastBackupAt: null },
+    settings: { weightStep: 2.5, lastBackupAt: null, hrMax: 190, heatMetric: 'load', health: defaultHealth() },
   };
 }
 
@@ -23,6 +25,26 @@ export function emptyDB(): DB {
 
 const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d);
+const numOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function cleanHeart(v: unknown): HeartData | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const h = v as Record<string, unknown>;
+  if (typeof h.at !== 'number' || typeof h.n !== 'number' || !Number.isFinite(h.at) || !Number.isFinite(h.n)) return undefined;
+  const out: HeartData = { at: h.at, n: Math.max(0, Math.round(h.n)) };
+  for (const k of ['avg', 'max', 'min', 'kcal', 'cover'] as const) {
+    const x = h[k];
+    if (typeof x === 'number' && Number.isFinite(x) && x >= 0) out[k] = x;
+  }
+  if (typeof h.src === 'string' && h.src) out.src = h.src.slice(0, 60);
+  if (typeof h.pts === 'string' && /^[\d:,.-]*$/.test(h.pts)) out.pts = h.pts.slice(0, 40_000);
+  return out;
+}
+
+function cleanHealth(v: unknown): HealthSettings {
+  const h = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  return { on: h.on === true, since: numOrNull(h.since), history: h.history === true, lastSync: numOrNull(h.lastSync) };
+}
 
 /** Accepts anything that looks like a Logbook backup and returns a clean DB. */
 export function sanitize(raw: unknown): DB {
@@ -61,6 +83,7 @@ export function sanitize(raw: unknown): DB {
             .filter((s) => s && typeof s.reps === 'number')
             .map((s) => ({ id: str(s.id) || uid(), kg: Math.max(0, num(s.kg)), reps: Math.max(0, Math.round(num(s.reps))), at: num(s.at, num(w.startedAt)) })),
         })),
+      ...(cleanHeart(w.hr) ? { hr: cleanHeart(w.hr) } : {}),
     }));
   const bodyweight: BodyWeightLog[] = Array.isArray(r.bodyweight)
     ? (r.bodyweight as Record<string, unknown>[])
@@ -85,6 +108,9 @@ export function sanitize(raw: unknown): DB {
     settings: {
       weightStep: [1, 1.25, 2, 2.5, 5].includes(num(s.weightStep)) ? num(s.weightStep) : 2.5,
       lastBackupAt: typeof s.lastBackupAt === 'number' ? s.lastBackupAt : null,
+      hrMax: Math.round(Math.min(230, Math.max(120, num(s.hrMax, 190)))),
+      heatMetric: s.heatMetric === 'sets' || s.heatMetric === 'kcal' ? s.heatMetric : 'load',
+      health: cleanHealth(s.health),
     },
   };
 }
@@ -304,6 +330,8 @@ export function updateWorkout(workoutId: string, patch: Partial<Pick<Workout, 'n
     const next = mapWorkout(d, workoutId, (w) => {
       const merged = { ...w, ...patch };
       if (merged.name !== undefined && !merged.name.trim()) delete merged.name;
+      // New time window: heart rate has to be read again for it.
+      if (merged.startedAt !== w.startedAt || merged.endedAt !== w.endedAt) delete merged.hr;
       return merged;
     });
     return { ...next, workouts: [...next.workouts].sort((a, b) => a.startedAt - b.startedAt) };
@@ -372,6 +400,34 @@ export function deleteBodyWeight(id: string) {
 
 export function setSettings(patch: Partial<Settings>) {
   update((d) => ({ ...d, settings: { ...d.settings, ...patch } }));
+}
+
+export function setHealth(patch: Partial<HealthSettings>) {
+  update((d) => ({ ...d, settings: { ...d.settings, health: { ...d.settings.health, ...patch } } }));
+}
+
+export interface HeartResult {
+  id: string;
+  /** the window the data was read for; skipped if the workout moved meanwhile */
+  startedAt: number;
+  endedAt: number;
+  hr: HeartData;
+}
+
+/** Stores heart rate read for workouts (one update for the whole batch). */
+export function applyHeart(results: HeartResult[]) {
+  if (!results.length) return;
+  const byId = new Map(results.map((r) => [r.id, r]));
+  update((d) => {
+    let changed = false;
+    const workouts = d.workouts.map((w) => {
+      const r = byId.get(w.id);
+      if (!r || r.startedAt !== w.startedAt || r.endedAt !== w.endedAt) return w;
+      changed = true;
+      return { ...w, hr: r.hr };
+    });
+    return changed ? { ...d, workouts } : d;
+  });
 }
 
 export function replaceDB(next: DB) {

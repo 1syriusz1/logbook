@@ -4,6 +4,7 @@ import { flush, initStore } from './lib/store';
 import { initNav } from './lib/nav';
 import { onAppPause, registerServiceWorker, requestPersistentStorage } from './lib/platform';
 import { demoDB } from './lib/demo';
+import { initHealth } from './lib/health';
 import './styles/base.css';
 import './styles/screens.css';
 
@@ -14,6 +15,7 @@ async function boot() {
   requestPersistentStorage();
   registerServiceWorker();
   createRoot(document.getElementById('root')!).render(<App />);
+  void initHealth();
 }
 
 boot();

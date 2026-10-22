@@ -25,7 +25,9 @@ export type IconName =
   | 'import'
   | 'clock'
   | 'play'
-  | 'flag';
+  | 'flag'
+  | 'heart'
+  | 'refresh';
 
 const P: Record<IconName, ReactNode> = {
   home: (
@@ -101,6 +103,8 @@ const P: Record<IconName, ReactNode> = {
   ),
   play: <path d="M8 5.5v13l10.5-6.5z" />,
   flag: <path d="M5.5 21V4.5M5.5 4.5h11l-2 4 2 4h-11" />,
+  heart: <path d="M12 19.5s-7.5-4.4-7.5-10a4.2 4.2 0 0 1 7.5-2.6 4.2 4.2 0 0 1 7.5 2.6c0 5.6-7.5 10-7.5 10zM7 11.5h2.4l1.3-2.3 2.2 4.4 1.3-2.1H17" />,
+  refresh: <path d="M19.5 12a7.5 7.5 0 1 1-2.3-5.4M19.5 4v3.8h-3.8" />,
 };
 
 interface Props extends SVGProps<SVGSVGElement> {

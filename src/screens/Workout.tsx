@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Entry, Exercise, Workout } from '../lib/types';
 import { nav, toast, type Layer } from '../lib/nav';
 import { useData, useNow } from '../lib/derived';
+import { useHealth } from '../lib/health';
 import {
   deleteSet,
   deleteWorkout,
@@ -448,6 +449,7 @@ export function FinishSheet({ layer, id }: { layer: Layer; id: string }) {
 
 export function SummarySheet({ layer, id }: { layer: Layer; id: string }) {
   const data = useData();
+  const health = useHealth();
   const s = data.byId.get(id);
   const w = data.finished.find((x) => x.id === id);
   if (!s || !w) return <Sheet layer={layer} />;
@@ -503,6 +505,11 @@ export function SummarySheet({ layer, id }: { layer: Layer; id: string }) {
           <div className="sum-label">Muscles · sets</div>
           <MuscleSplit muscles={s.muscles} />
         </div>
+      )}
+      {health.state === 'on' && !data.heart.has(id) && (
+        <p className="sheet-note sum-hr">
+          <Icon name="heart" size={16} /> Heart rate and calories join this workout once Google Health syncs your band.
+        </p>
       )}
     </Sheet>
   );

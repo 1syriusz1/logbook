@@ -1,8 +1,9 @@
 /* Sample training history: ~5 months of a push / pull / legs split with
    steady progression, used for the live preview and "Load sample data". */
-import type { DB, Entry, Workout } from './types';
+import type { DB, Entry, HeartData, Workout } from './types';
 import { emptyDB, uid } from './store';
 import { addDays, dayKey, DAY, startOfDay, startOfWeek } from './format';
+import { processHeart, SETTLE_MS, type RawSample } from './heart';
 
 function rng(seed: number) {
   return () => {
@@ -55,6 +56,44 @@ const UPPER: Plan[] = [
   { id: 'hammer-curl', from: 14, to: 20, sets: 3, reps: [10, 12], step: 2 },
   { id: 'rope-pushdown', from: 25, to: 32.5, sets: 3, reps: [12, 12], step: 2.5 },
 ];
+
+/** How far a set pushes heart rate above standing, roughly. */
+const EFFORT: Record<string, number> = {
+  squat: 62, deadlift: 66, 'romanian-deadlift': 56, 'leg-press': 58, 'lying-leg-curl': 38, 'standing-calf-raise': 34,
+  'hanging-leg-raise': 36, 'bench-press': 46, 'incline-db-press': 44, 'overhead-press': 46, 'weighted-dip': 48,
+  'lateral-raise': 30, 'triceps-pushdown': 30, 'weighted-pull-up': 50, 'barbell-row': 48, 'lat-pulldown': 40,
+  'face-pull': 30, 'barbell-curl': 32, 'incline-bench-press': 44, 'chest-supported-row': 42, 'seated-db-press': 42,
+  'cable-fly': 32, 'hammer-curl': 30, 'rope-pushdown': 30,
+};
+
+/** A plausible band recording: heart rate climbs during each set and settles while resting. */
+function demoHeart(w: Workout): HeartData {
+  const start = w.startedAt;
+  const end = w.endedAt ?? start;
+  const r = rng(Math.floor(start / 1000));
+  const sets = w.entries
+    .flatMap((e) => e.sets.map((s) => ({ at: s.at, reps: s.reps, effort: EFFORT[e.exerciseId] ?? 40 })))
+    .sort((a, b) => a.at - b.at);
+  const base = 84 + r() * 8;
+  const form = (r() - 0.5) * 8;
+  let hr = base + 4;
+  let si = 0;
+  let kcal = 0;
+  const samples: RawSample[] = [];
+  for (let t = start; t <= end; t += 5000) {
+    while (si < sets.length && sets[si].at < t) si++;
+    const cur = sets[si];
+    const dur = cur ? (cur.reps * 3.2 + 9) * 1000 : 0;
+    const active = cur && t >= cur.at - dur;
+    const drift = ((t - start) / Math.max(1, end - start)) * 7;
+    const target = active ? base + form + cur.effort + drift + ((t - (cur.at - dur)) / dur) * 9 : base + form * 0.5 + 19 + drift;
+    hr += (target - hr) * (1 - Math.exp(-5 / (active ? 13 : 38)));
+    const bpm = Math.round(hr + (r() - 0.5) * 3.5);
+    samples.push({ t, bpm, src: 'com.fitbit.FitbitMobile', label: 'Google Fitbit Air' });
+    kcal += (1.3 + Math.max(0, bpm - 80) * 0.095) * (5 / 60);
+  }
+  return processHeart(start, end, samples, { kcal }, end + SETTLE_MS + 60_000);
+}
 
 export function demoDB(now = Date.now()): DB {
   const r = rng(20261019);
@@ -117,6 +156,9 @@ export function demoDB(now = Date.now()): DB {
     const kg = Math.round((84.6 - 2.5 * p + (r() - 0.5) * 0.8) * 10) / 10;
     bodyweight.push({ id: uid(), date: dayKey(d), kg });
   }
+
+  // The band joined ten weeks ago: recent workouts carry heart rate and calories.
+  for (const w of workouts) if (w.startedAt >= now - 70 * DAY) w.hr = demoHeart(w);
 
   db.workouts = workouts.sort((a, b) => a.startedAt - b.startedAt);
   db.bodyweight = bodyweight;

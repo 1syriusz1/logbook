@@ -5,9 +5,119 @@ import { exportJSON, replaceDB, resetAll, sanitize, setSettings } from '../lib/s
 import { demoDB } from '../lib/demo';
 import { dayKey, fmtAgo, plural } from '../lib/format';
 import { isNative, shareFile } from '../lib/platform';
-import { Button, Segmented } from '../components/ui';
+import { connectHealth, disconnectHealth, openHealthConnect, syncHeart, useHealth, type HealthState } from '../lib/health';
+import { Button, Segmented, Stepper } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Page, Sheet } from '../components/layers';
+
+const HC_STORE = 'https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata';
+
+function HealthSection() {
+  const data = useData();
+  const s = data.db.settings;
+  const h = useHealth();
+  const withHr = data.heart.size;
+  let highest = 0;
+  for (const v of data.heart.values()) highest = Math.max(highest, v.max);
+
+  const status: Record<HealthState, string> = {
+    checking: 'Checking…',
+    unsupported: 'Works in the Android app',
+    unavailable: 'Health Connect isn’t on this phone',
+    update: 'Health Connect needs an update',
+    off: 'Not connected',
+    denied: 'Access was turned off in Health Connect',
+    on: h.syncing
+      ? `Reading workouts… ${h.done}/${h.total}`
+      : `Connected · ${plural(withHr, 'workout')} with heart rate${s.health.lastSync ? ` · synced ${fmtAgo(s.health.lastSync)}` : ''}`,
+  };
+
+  return (
+    <>
+      <div className="list-label">Heart rate</div>
+      <div className="card hc-card">
+        <div className="hc-top">
+          <span className="hc-icon">
+            <Icon name="heart" size={20} />
+          </span>
+          <div className="row-main">
+            <div className="row-title">Health Connect</div>
+            <div className="row-sub">{status[h.state]}</div>
+          </div>
+          {h.state === 'off' && (
+            <Button variant="primary" size="sm" onClick={() => connectHealth()}>
+              Connect
+            </Button>
+          )}
+          {h.state === 'denied' && (
+            <Button variant="primary" size="sm" onClick={() => connectHealth()}>
+              Reconnect
+            </Button>
+          )}
+          {(h.state === 'unavailable' || h.state === 'update') && (
+            <a className="btn btn-secondary btn-sm" href={HC_STORE} target="_blank" rel="noreferrer">
+              {h.state === 'update' ? 'Update' : 'Get it'}
+            </a>
+          )}
+        </div>
+        <p className="sub hc-text">
+          Logbook reads the heart rate and calories that Google Health saves from your Fitbit, for the time of each workout.
+          Nothing leaves your phone.
+        </p>
+        {(h.state === 'on' || h.state === 'denied') && (
+          <div className="hc-actions">
+            {h.state === 'on' && (
+              <Button size="sm" icon="refresh" disabled={h.syncing} onClick={() => syncHeart()}>
+                {h.syncing ? 'Syncing…' : 'Sync now'}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => openHealthConnect()}>
+              Permissions
+            </Button>
+            {h.state === 'on' && (
+              <Button size="sm" variant="ghost" onClick={() => disconnectHealth()}>
+                Turn off
+              </Button>
+            )}
+          </div>
+        )}
+        {h.error && <p className="hc-error">{h.error}</p>}
+      </div>
+
+      <div className="card">
+        <div className="card-label">Max heart rate</div>
+        <div className="set-seg">
+          <Stepper id="hr-max" value={s.hrMax} onChange={(v) => setSettings({ hrMax: v })} step={1} min={120} max={230} unit="bpm" integer />
+        </div>
+        <div className="sub">
+          Sets your zones: Z1 starts at 50% of it, Z5 at 90%. A rough guide is 208 − 0.7 × your age.
+          {highest ? ` Highest in a workout so far: ${highest} bpm.` : ''}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-label">Heatmap shade</div>
+        <div className="set-seg">
+          <Segmented
+            label="Heatmap shade"
+            value={s.heatMetric}
+            onChange={(v) => setSettings({ heatMetric: v })}
+            options={[
+              { value: 'load', label: 'HR load' },
+              { value: 'kcal', label: 'Calories' },
+              { value: 'sets', label: 'Sets' },
+            ]}
+          />
+        </div>
+        <div className="sub">
+          {s.heatMetric === 'sets'
+            ? 'Brighter squares are days with more sets.'
+            : `Brighter squares are days with more ${s.heatMetric === 'load' ? 'heart-rate load' : 'calories burned'}. Days without heart-rate data are shaded by sets.`}
+        </div>
+      </div>
+    </>
+  );
+}
 
 
 export function SettingsPage({ layer }: { layer: Layer }) {
@@ -69,6 +179,8 @@ export function SettingsPage({ layer }: { layer: Layer }) {
         </div>
         <div className="sub">You can always type an exact weight.</div>
       </div>
+
+      <HealthSection />
 
       <div className="list-label">Your data</div>
       <div className="group">

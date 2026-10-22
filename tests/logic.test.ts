@@ -5,6 +5,24 @@ import { LIBRARY, defaultLoad, equipmentLabel } from '../src/lib/exercises';
 import { prLabel } from '../src/lib/labels';
 import { fmtNum, fmtClock, fmtDur, parseNum, startOfWeek, dayKey, fmtKg } from '../src/lib/format';
 import type { Workout } from '../src/lib/types';
+import {
+  clean,
+  coverage,
+  decodeSeries,
+  entryHeart,
+  exerciseBlocks,
+  heartView,
+  heatLevels,
+  isHeartDue,
+  loadOf,
+  pickSource,
+  processHeart,
+  prorateKcal,
+  SETTLE_MS,
+  zoneOf,
+  zoneSeconds,
+  type RawSample,
+} from '../src/lib/heart';
 
 const ex = toExMap(LIBRARY);
 const D = 86400000;
@@ -133,5 +151,132 @@ assert.equal(parseNum(' 100 '), 100);
 assert.equal(parseNum(''), null);
 assert.equal(dayKey(startOfWeek(new Date(2026, 9, 18, 12).getTime())), '2026-10-12', 'weeks start on Monday');
 assert.ok(rangeStart('3m', null, new Date(2026, 9, 19).getTime()) === new Date(2026, 6, 19).getTime());
+
+// ------------------------------------------------------------ heart rate
+{
+  const S = base;
+  const E = base + 60 * 60000;
+  const steady = (bpm: number, from = S, to = E, step = 15000, src = 'fit'): RawSample[] => {
+    const out: RawSample[] = [];
+    for (let t = from; t <= to; t += step) out.push({ t, bpm, src });
+    return out;
+  };
+
+  // source picking, cleaning
+  const mixed = [...steady(120), ...steady(70, S, E, 300000, 'phone')];
+  assert.equal(pickSource(mixed).every((x) => x.src === 'fit'), true, 'dominant source wins');
+  assert.deepEqual(
+    clean([{ t: 5, bpm: 100 }, { t: 1, bpm: 20 }, { t: 3, bpm: 110 }, { t: 3, bpm: 111 }, { t: 99, bpm: 100 }], 0, 50).map((x) => x.t),
+    [3, 5],
+    'sorted, deduplicated, plausible, inside the window',
+  );
+
+  // nothing found
+  const none = processHeart(S, E, [], {}, 123);
+  assert.deepEqual(none, { at: 123, n: 0 });
+
+  // steady 120 bpm, a sample every 15 s, plus samples outside the window and another source
+  const h = processHeart(S, E, [...steady(100, S - 600000, S - 15000), ...steady(120), ...steady(70, S, E, 300000, 'phone')], { kcal: 412.4 }, 1);
+  assert.equal(h.n, 241);
+  assert.equal(h.avg, 120);
+  assert.equal(h.max, 120);
+  assert.equal(h.min, 120, 'no samples from before the workout or from the phone');
+  assert.equal(h.cover, 1);
+  assert.equal(h.kcal, 412);
+  const pts = decodeSeries(h.pts);
+  assert.ok(pts.length > 100 && pts.length <= 480, 'downsampled series');
+  assert.equal(pts[0][0], 0);
+  assert.ok(pts.every(([t, b]) => t >= 0 && t <= 3600 && b === 120));
+
+  // long workout stays under ~480 points
+  const long = processHeart(S, S + 4 * 3600000, steady(110, S, S + 4 * 3600000, 1000), {}, 1);
+  assert.ok(decodeSeries(long.pts).length <= 490, 'four hours at 1 Hz → at most ~480 points');
+
+  // half the workout recorded
+  assert.ok(Math.abs(coverage(steady(120, S, S + 30 * 60000), S, E) - 0.5) < 0.02);
+  // a sample every minute still covers the whole workout
+  assert.ok(coverage(steady(120, S, E, 60000), S, E) > 0.99);
+
+  // zones (max 200): Z1 from 100, Z2 from 120 … Z5 from 180
+  assert.deepEqual([99, 100, 119, 120, 139, 140, 160, 179, 180, 210].map((b) => zoneOf(b, 200)), [0, 1, 1, 2, 2, 3, 4, 4, 5, 5]);
+  const z = zoneSeconds(decodeSeries(processHeart(S, E, steady(130), {}, 1).pts), 200);
+  assert.ok(z[2] > 3500 && z[2] <= 3620 && z[0] + z[1] + z[3] + z[4] + z[5] === 0, '60 min in Z2 (the last sample counts one step)');
+  assert.equal(loadOf([0, 600, 1200, 0, 0, 0]), 10 + 40, 'load = minutes × zone');
+
+  // heart view follows max heart rate
+  const v190 = heartView(h, 190)!;
+  assert.equal(heartView(h, 190), v190, 'cached');
+  const v150 = heartView(h, 150)!;
+  assert.equal(zoneOf(120, 190), 2);
+  assert.ok(v190.load > 100 && v190.load < 130, `120 bpm for an hour at max 190 → Z2 ≈ 120 load (${v190.load})`);
+  assert.ok(v150.load > v190.load, 'lower max → higher zones → more load');
+  assert.equal(heartView(none, 190), null);
+  assert.equal(heartView(undefined, 190), null);
+
+  // exercise blocks: A A B B A (back to A later)
+  const wk: Workout = {
+    id: 'hb', startedAt: S, endedAt: E,
+    entries: [
+      { id: 'a', exerciseId: 'squat', sets: [{ id: 'a1', kg: 100, reps: 5, at: S + 10 * 60000 }, { id: 'a2', kg: 100, reps: 5, at: S + 14 * 60000 }, { id: 'a3', kg: 100, reps: 5, at: S + 40 * 60000 }] },
+      { id: 'b', exerciseId: 'leg-press', sets: [{ id: 'b1', kg: 200, reps: 10, at: S + 20 * 60000 }, { id: 'b2', kg: 200, reps: 10, at: S + 25 * 60000 }] },
+    ],
+  };
+  const blocks = exerciseBlocks(wk);
+  assert.deepEqual(blocks.map((b) => [b.entry, (b.start - S) / 60000, (b.end - S) / 60000, b.sets.length]), [
+    [0, 0, 14, 2],
+    [1, 14, 25, 2],
+    [0, 25, 40, 1],
+  ]);
+  const ramp: [number, number][] = [];
+  for (let t = 0; t <= 3600; t += 60) ramp.push([t, t < 14 * 60 ? 100 : t <= 25 * 60 ? 140 : 120]);
+  const per = entryHeart(blocks, ramp, S);
+  assert.equal(per.get(1)!.peak, 140);
+  assert.equal(per.get(1)!.avg, 140);
+  assert.ok(per.get(0)!.avg > 100 && per.get(0)!.avg < 120, 'squat spans both of its blocks');
+
+  // calories from interval records: overlap counted, sources not added up
+  assert.equal(
+    prorateKcal(
+      [
+        { start: S - 30 * 60000, end: S + 30 * 60000, kcal: 600, src: 'fit' }, // half inside → 300
+        { start: S + 30 * 60000, end: S + 90 * 60000, kcal: 600, src: 'fit' }, // half inside → 300
+        { start: S, end: E, kcal: 100, src: 'phone' },
+      ],
+      S,
+      E,
+    ),
+    600,
+  );
+  assert.equal(prorateKcal([], S, E), null);
+
+  // when to read again
+  const wf = (hr?: Workout['hr'], endedAgo = 60 * 60000): Workout => ({ id: 'x', startedAt: E - endedAgo - 3600000, endedAt: E - endedAgo, entries: [], ...(hr ? { hr } : {}) });
+  assert.equal(isHeartDue(wf(), E), true, 'never read');
+  assert.equal(isHeartDue({ ...wf(), endedAt: null }, E), false, 'still training');
+  assert.equal(isHeartDue(wf({ at: E - 5 * 60000, n: 0 }), E), false, 'just looked');
+  assert.equal(isHeartDue(wf({ at: E - 20 * 60000, n: 0 }), E), true, 'nothing yet, look again');
+  assert.equal(isHeartDue(wf({ at: E - 20 * 60000, n: 300, cover: 0.97, kcal: 300 }), E), false, 'complete');
+  assert.equal(isHeartDue(wf({ at: E - 20 * 60000, n: 300, cover: 0.97 }), E), true, 'calories still missing');
+  const oldW = wf({ at: E - 10 * 60000, n: 0 }, 2 * SETTLE_MS);
+  assert.equal(isHeartDue(oldW, E), false, 'read after the data settled: final');
+  assert.equal(isHeartDue(wf({ at: E - 3 * SETTLE_MS, n: 0 }, 2 * SETTLE_MS), E), true, 'one more look once settled');
+
+  // heatmap: heart-rate load where every workout of the day has it, sets otherwise
+  const hw = [
+    w(0, [['bench-press', [[80, 8], [80, 8]]]]),
+    w(1, [['bench-press', [[80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8], [80, 8]]]]),
+  ];
+  const hdays = dayStats(hw.map((x) => summarize(x, ex)));
+  const heart = new Map([[hw[0].id, { ...heartView(h, 150)! }]]);
+  const byLoad = heatLevels(hdays, heart, 'load');
+  const bySets = heatLevels(hdays, heart, 'sets');
+  const k0 = dayKey(hw[0].startedAt);
+  const k1 = dayKey(hw[1].startedAt);
+  assert.equal(bySets.levels.get(k0), 1, '2 sets → faint');
+  assert.equal(byLoad.levels.get(k0), 4, 'but a long hard hour on the heart-rate scale');
+  assert.equal(byLoad.levels.get(k1), bySets.levels.get(k1), 'no heart rate → sets');
+  assert.deepEqual(byLoad.info, { metric: 'load', hrDays: 1, fallbackDays: 1 });
+  assert.equal(heatLevels(hdays, heart, 'kcal').levels.get(k0), 3, '412 kcal on the fixed calorie scale');
+}
 
 console.log('logic tests passed');

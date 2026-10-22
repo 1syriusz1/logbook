@@ -1083,3 +1083,280 @@ button.stat-card {
   width: 100%;
   text-align: left;
 }
+
+/* ------------------------------------------------------------ heart rate */
+
+.heart-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hr-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.hr-stat {
+  min-width: 0;
+}
+.hr-stat-v {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.hr-stat-v .unit {
+  font-size: 0.52em;
+  font-weight: 600;
+  color: var(--fg-3);
+  margin-left: 2px;
+  letter-spacing: 0;
+}
+.hr-stat-l {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-weight: 550;
+  margin-top: 4px;
+}
+
+.hb-band {
+  fill: transparent;
+  transition: fill 0.15s;
+}
+.hb-band.alt {
+  fill: rgba(255, 255, 255, 0.028);
+}
+.hb-band.on {
+  fill: rgba(255, 255, 255, 0.08);
+}
+.hb-num {
+  fill: var(--fg-4);
+  font-size: 9.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.hb-num.on {
+  fill: var(--fg);
+}
+.hb-set {
+  stroke: var(--fg-4);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+.hb-set.on {
+  stroke: var(--fg);
+}
+.hb-line {
+  stroke-width: 1.7;
+}
+.hb-peak {
+  fill: var(--card);
+  stroke: var(--fg);
+  stroke-width: 1.6;
+}
+
+.hr-ex {
+  display: flex;
+  flex-direction: column;
+  margin: -4px -6px 0;
+}
+.hr-ex-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px;
+  border-radius: 12px;
+  text-align: left;
+  transition: background-color 0.15s;
+}
+.hr-ex-row.on {
+  background: var(--card-2);
+}
+.hr-n {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--card-3);
+  color: var(--fg-2);
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.hr-ex-row.on .hr-n {
+  background: var(--inv);
+  color: var(--inv-fg);
+}
+.hr-ex-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hr-ex-v {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+.hr-ex-v .u,
+.hr-ex-v.u {
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+.hr-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hr-zones-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--fg-2);
+}
+.hr-max {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--fg-3);
+  padding: 2px 0 2px 8px;
+}
+.zone-split {
+  height: 8px;
+}
+.zt0 {
+  background: #2c2e33;
+}
+.zt1 {
+  background: #4a4d55;
+}
+.zt2 {
+  background: #747880;
+}
+.zt3 {
+  background: #a3a7ae;
+}
+.zt4 {
+  background: #d2d4d8;
+}
+.zt5 {
+  background: #ffffff;
+}
+.zone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.zone-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg-3);
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.zone-item b {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.zone-item i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.hr-note {
+  margin: -2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+.hr-recheck {
+  color: var(--fg-2);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.hr-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.hr-empty .card-label {
+  align-self: stretch;
+}
+.hr-empty-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+.heat-what {
+  margin-top: -6px;
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+
+/* settings: Health Connect */
+.hc-card + .card,
+.hc-card + .card + .card {
+  margin-top: 10px;
+}
+.hc-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hc-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--card-2);
+  color: var(--fg-2);
+}
+.hc-top .btn {
+  flex-shrink: 0;
+}
+.hc-text {
+  margin-top: 12px;
+  line-height: 1.5;
+}
+.hc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.hc-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.sum-hr {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 18px;
+}
+.sum-hr svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
