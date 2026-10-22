@@ -290,7 +290,15 @@ async function syncWellness(b: Backend, floor: number, now: number): Promise<boo
   const today = startOfDay(now);
   const fullFrom = Math.max(floor, addDays(today, -60));
   const recentFrom = Math.max(floor, addDays(today, -3));
-  const fromFor = (kind: WellnessKind) => (filled[kind] !== undefined && filled[kind]! <= fullFrom + DAY ? recentFrom : fullFrom);
+  const upTo = { ...(hs.upTo ?? {}) };
+  // First time: the whole 60 days. After that: from where the last read left off
+  // (minus two days for data that arrives late), and always at least the last 3 days,
+  // so a week without opening Logbook leaves no gap.
+  const fromFor = (kind: WellnessKind) => {
+    if (filled[kind] === undefined || filled[kind]! > fullFrom + DAY) return fullFrom;
+    const last = upTo[kind];
+    return last === undefined ? recentFrom : Math.max(fullFrom, Math.min(recentFrom, addDays(startOfDay(last), -2)));
+  };
   const allowed = (type: string) => ui.granted.size === 0 || ui.granted.has(type);
   const keepAfter = (map: Record<string, unknown>, from: number) => {
     const first = dayKey(from);
@@ -362,15 +370,17 @@ async function syncWellness(b: Backend, floor: number, now: number): Promise<boo
     try {
       await job(from);
       filled[kind] = Math.min(filled[kind] ?? Infinity, from);
+      upTo[kind] = now;
     } catch (e) {
       if ((await triage(e)) === 'stop') {
         applyWellness(combineDays(parts), activities, addDays(today, -120));
+        setHealth({ filled, upTo });
         return false;
       }
     }
   }
   applyWellness(combineDays(parts), activities, addDays(today, -120));
-  setHealth({ filled });
+  setHealth({ filled, upTo });
   return true;
 }
 

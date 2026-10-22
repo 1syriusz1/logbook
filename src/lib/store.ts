@@ -109,13 +109,15 @@ function cleanActivities(v: unknown): Activity[] {
 function cleanHealth(v: unknown): HealthSettings {
   const h = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
   const out: HealthSettings = { on: h.on === true, since: numOrNull(h.since), history: h.history === true, lastSync: numOrNull(h.lastSync) };
-  if (h.filled && typeof h.filled === 'object') {
-    const f: HealthSettings['filled'] = {};
+  for (const field of ['filled', 'upTo'] as const) {
+    const src = h[field];
+    if (!src || typeof src !== 'object') continue;
+    const f: Partial<Record<'sleep' | 'hrv' | 'rhr' | 'resp' | 'steps' | 'workouts', number>> = {};
     for (const k of ['sleep', 'hrv', 'rhr', 'resp', 'steps', 'workouts'] as const) {
-      const x = (h.filled as Record<string, unknown>)[k];
+      const x = (src as Record<string, unknown>)[k];
       if (typeof x === 'number' && Number.isFinite(x)) f[k] = x;
     }
-    out.filled = f;
+    out[field] = f;
   }
   return out;
 }

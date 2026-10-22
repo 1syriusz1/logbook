@@ -137,6 +137,8 @@ export interface HealthSettings {
   lastSync: number | null;
   /** per kind of recovery data, the earliest time already read (so later syncs only refresh recent days) */
   filled?: Partial<Record<WellnessKind, number>>;
+  /** per kind, when it was last read (the next sync carries on from there) */
+  upTo?: Partial<Record<WellnessKind, number>>;
 }
 
 export type WellnessKind = 'sleep' | 'hrv' | 'rhr' | 'resp' | 'steps' | 'workouts';
