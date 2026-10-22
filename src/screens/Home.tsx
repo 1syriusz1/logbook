@@ -26,6 +26,7 @@ import { Delta, IconButton, Num } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Heatmap, HeatLegend, Sparkline } from '../components/charts';
 import { DurNum, SetValue } from '../components/bits';
+import { ReadinessCard } from '../components/readiness';
 
 const WD = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
@@ -126,6 +127,8 @@ export function Home() {
             </div>
           </button>
         )}
+
+        <ReadinessCard />
 
         <button className="card" onClick={() => nav.setTab('history')}>
           <div className="card-label">This week</div>

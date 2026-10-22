@@ -23,6 +23,10 @@ import {
   zoneSeconds,
   type RawSample,
 } from '../src/lib/heart';
+import { buildNights, morningOf, perMorning, overlapsWorkout } from '../src/lib/wellness';
+import { baseline, computeReadiness, curve, muscleFreshness, performanceIndex, readinessHistory, spearman, suggestWorkout, type ReadinessInput } from '../src/lib/readiness';
+import type { DayHealth, HeartData } from '../src/lib/types';
+import { addDays as addD, startOfDay as sod } from '../src/lib/format';
 
 const ex = toExMap(LIBRARY);
 const D = 86400000;
@@ -277,6 +281,212 @@ assert.ok(rangeStart('3m', null, new Date(2026, 9, 19).getTime()) === new Date(2
   assert.equal(byLoad.levels.get(k1), bySets.levels.get(k1), 'no heart rate → sets');
   assert.deepEqual(byLoad.info, { metric: 'load', hrDays: 1, fallbackDays: 1 });
   assert.equal(heatLevels(hdays, heart, 'kcal').levels.get(k0), 3, '412 kcal on the fixed calorie scale');
+}
+
+// ------------------------------------------------------------ wellness
+{
+  const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).getTime();
+  assert.equal(morningOf(at(21, 7)), '2026-10-21');
+  assert.equal(morningOf(at(20, 23, 30)), '2026-10-21', 'bedtime counts for the next morning');
+  assert.equal(morningOf(at(21, 14, 59)), '2026-10-21', 'a nap before 15:00 counts for that day');
+  assert.equal(morningOf(at(21, 15)), '2026-10-22');
+
+  const stages = [
+    { start: at(20, 23), end: at(20, 23, 40), stage: 'light' },
+    { start: at(20, 23, 40), end: at(21, 1, 10), stage: 'deep' },
+    { start: at(21, 1, 10), end: at(21, 3, 0), stage: 'rem' },
+    { start: at(21, 3, 0), end: at(21, 3, 40), stage: 'awake' },
+    { start: at(21, 3, 40), end: at(21, 7, 0), stage: 'light' },
+  ];
+  const nights = buildNights([
+    { start: at(20, 23), end: at(21, 7), src: 'fit', stages },
+    { start: at(20, 23, 30), end: at(21, 6), src: 'fit' }, // the same night written again, shorter
+    { start: at(21, 13), end: at(21, 13, 30), src: 'fit' }, // nap
+    { start: at(20, 22), end: at(21, 8), src: 'phone' }, // another app, ignored
+  ]);
+  const n = nights['2026-10-21'];
+  assert.equal(n.bed, 480 + 30, 'night plus nap in bed');
+  assert.equal(n.deep, 90);
+  assert.equal(n.rem, 110);
+  assert.equal(n.awake, 40);
+  assert.equal(n.asleep, 440 + 30, 'stages asleep plus the nap');
+  assert.equal(Object.keys(nights).length, 1);
+
+  const hrv = perMorning([
+    { t: at(21, 3), value: 50, src: 'fit' },
+    { t: at(21, 5), value: 72, src: 'fit' },
+    { t: at(21, 4), value: 999, src: 'fit' },
+  ], 'hrv');
+  assert.equal(hrv['2026-10-21'], 60, 'HRV averaged on a log scale (geometric mean of 50 and 72)');
+  assert.deepEqual(perMorning([{ t: at(21, 8), value: 54 }, { t: at(21, 9), value: 58 }, { t: at(21, 10), value: 57 }], 'rhr'), { '2026-10-21': 57 });
+
+  const gym: Workout = { id: 'g', startedAt: at(21, 18), endedAt: at(21, 19), entries: [] };
+  assert.equal(overlapsWorkout({ start: at(21, 18, 5), end: at(21, 18, 55) }, [gym]), true, 'same session recorded twice');
+  assert.equal(overlapsWorkout({ start: at(21, 19, 30), end: at(21, 20, 30) }, [gym]), false);
+}
+
+// ------------------------------------------------------------ readiness
+{
+  assert.equal(curve(0, [[-1, 10], [1, 30]]), 20);
+  assert.equal(curve(-5, [[-1, 10], [1, 30]]), 10);
+  assert.equal(curve(5, [[-1, 10], [1, 30]]), 30);
+  const b = baseline([50, 52, 51, 49, 200], 0.5)!;
+  assert.equal(b.med, 51, 'median ignores the outlier');
+  assert.ok(b.sd < 3, 'robust spread');
+  assert.equal(baseline([1, 2], 1), null, 'too little data');
+  assert.ok(Math.abs(spearman([1, 2, 3, 4], [10, 20, 30, 40]) - 1) < 1e-9);
+  assert.ok(Math.abs(spearman([1, 2, 3, 4], [4, 3, 2, 1]) + 1) < 1e-9);
+
+  // 50 days of a steady trainee: push/pull/legs on Mon/Wed/Fri at 18:00, ~100 load each
+  const now = new Date(2026, 9, 22, 8, 0).getTime(); // Thursday morning
+  const day0 = sod(now);
+  const hrData = (load: number): HeartData => {
+    // a flat series at a fixed bpm gives a known load: 60 min at 130 bpm (Z2 at max 190) ≈ 120
+    const pts: string[] = [];
+    for (let t = 0; t <= 3600; t += 15) pts.push(`${t}:${load}`);
+    return { at: now, n: 241, avg: load, max: load, min: load, cover: 1, kcal: 400, pts: pts.join(',') };
+  };
+  const split = [
+    ['bench-press', 'overhead-press', 'triceps-pushdown'],
+    ['deadlift', 'barbell-row', 'barbell-curl'],
+    ['squat', 'leg-press', 'lying-leg-curl'],
+  ];
+  const mkW = (t: number, exs: string[], kgBump = 0): Workout => {
+    const start = t + 18 * 3600000;
+    let at = start + 10 * 60000;
+    return {
+      id: 'r' + t,
+      startedAt: start,
+      endedAt: start + 60 * 60000,
+      entries: exs.map((e, i) => ({ id: `${t}-${i}`, exerciseId: e, sets: [0, 1, 2].map((k) => ({ id: `${t}-${i}-${k}`, kg: 80 + kgBump, reps: 8, at: (at += 4 * 60000) })) })),
+      hr: hrData(130),
+    };
+  };
+  const workouts: Workout[] = [];
+  for (let i = 50; i >= 1; i--) {
+    const t = addD(day0, -i);
+    const wd = (new Date(t).getDay() + 6) % 7; // 0 = Monday
+    if (wd === 0 || wd === 2 || wd === 4) workouts.push(mkW(t, split[wd / 2]));
+  }
+  const wellness: Record<string, DayHealth> = {};
+  for (let i = 50; i >= 1; i--) {
+    const t = addD(day0, -i);
+    const j = i % 5;
+    wellness[dayKey(t)] = {
+      sleep: { start: t - 60 * 60000, end: t + 7 * 3600000, bed: 480, asleep: 445 + j * 6, deep: 80, rem: 100, light: 265 + j * 6, awake: 35 },
+      hrv: 58 + (j - 2) * 1.5,
+      rhr: 55 + ((j % 2) - 0.5),
+      resp: 14.5 + (j - 2) * 0.1,
+      steps: 7000 + j * 500,
+    };
+  }
+  const input = (today: DayHealth | null, extra: Partial<ReadinessInput> = {}): ReadinessInput => ({
+    workouts,
+    wellness: today ? { ...wellness, [dayKey(now)]: today } : { ...wellness },
+    activities: [],
+    ex,
+    hrMax: 190,
+    now,
+    ...extra,
+  });
+  const usual: DayHealth = { sleep: { start: day0 - 3600000, end: day0 + 7 * 3600000, bed: 480, asleep: 450, deep: 80, rem: 100, light: 270, awake: 30 }, hrv: 58, rhr: 55, resp: 14.5 };
+  const r = computeReadiness(input(usual))!;
+  console.log('   usual morning:', r.score, r.level, r.components.map((c) => `${c.key} ${c.score}`).join(', '));
+  assert.ok(r.score >= 60 && r.score < 85, `an ordinary morning is a normal day (${r.score})`);
+  assert.equal(r.components.length, 4);
+  assert.ok(Math.abs(r.components.reduce((a, c) => a + c.weight, 0) - 1) < 1e-9, 'weights add up to 1');
+
+  const great = computeReadiness(input({ ...usual, hrv: 70, rhr: 52, sleep: { ...usual.sleep!, asleep: 500, bed: 520 } }))!;
+  console.log('   great morning:', great.score, great.level);
+  assert.equal(great.level, 'heavy', 'high HRV, low resting HR and a long sleep → go heavy');
+
+  const bad = computeReadiness(input({ ...usual, hrv: 44, rhr: 61, sleep: { ...usual.sleep!, asleep: 280, bed: 320 } }))!;
+  console.log('   bad morning:', bad.score, bad.level, bad.flags);
+  assert.ok(bad.level === 'rest' || bad.level === 'light', 'short sleep, low HRV, high RHR → ease off');
+  assert.ok(bad.score <= 35, 'resting HR up + HRV down caps the score');
+  assert.ok(bad.flags.length >= 1);
+
+  const sick = computeReadiness(input({ ...usual, resp: 16.8, rhr: 61 }))!;
+  console.log('   breathing up:', sick.score, sick.flags[0]);
+  assert.ok(sick.score <= 30 && sick.level === 'rest', 'breathing rate + resting HR up → rest');
+
+  const short = computeReadiness(input({ ...usual, sleep: { ...usual.sleep!, asleep: 330 } }))!;
+  assert.ok(short.score < r.score, 'shorter sleep, lower score');
+  assert.ok(short.notes.some((x) => x.includes('volume')), 'advice: keep heavy sets, cut volume');
+
+  // nothing from the band: training load alone still gives a number
+  const noBand = computeReadiness({ ...input(null), wellness: {} })!;
+  assert.ok(noBand && noBand.components.length === 1 && noBand.components[0].key === 'load');
+  assert.equal(computeReadiness({ workouts: [], wellness: {}, activities: [], ex, hrMax: 190, now }), null, 'nothing to go on');
+
+  // a big ride yesterday lowers today's score through training load
+  const ride = { id: 'ride', type: 'biking', start: addD(day0, -1) + 10 * 3600000, end: addD(day0, -1) + 14 * 3600000 };
+  const afterRide = computeReadiness(input(usual, { activities: [ride] }))!;
+  console.log('   after a 4 h ride:', afterRide.score, afterRide.load.parts.map((x) => `${x.label} ${x.load}`).join(', '));
+  assert.ok(afterRide.score < r.score, 'a 4-hour ride counts');
+  assert.ok(afterRide.load.parts.some((x) => x.label === 'Bike ride'));
+
+  // history: one score per morning with data
+  const hist = readinessHistory(input(usual), 14);
+  assert.equal(hist.length, 14);
+  assert.ok(hist.every((h) => h.score >= 1 && h.score <= 100));
+
+  // muscles: legs yesterday evening are tired, push from Monday is fresh-ish
+  const wed = workouts[workouts.length - 1];
+  const musc = muscleFreshness(workouts, ex, now);
+  const m = Object.fromEntries(musc.map((x) => [x.muscle, x]));
+  console.log('   muscles:', musc.map((x) => `${x.muscle} ${x.freshness}`).join(', '), '· last workout', new Date(wed.startedAt).toDateString());
+  assert.ok(m.core.freshness === 100 && m.core.lastDays === null, 'never trained → fresh');
+  const lastLegs = workouts.filter((w) => w.entries.some((e) => e.exerciseId === 'squat')).pop()!;
+  const legsHours = (now - lastLegs.startedAt) / 3600000;
+  if (legsHours < 24) assert.ok(m.legs.freshness < 60, 'legs trained last night are not ready');
+  assert.ok(musc.every((x) => x.freshness >= 0 && x.freshness <= 100));
+
+  const sug = suggestWorkout(workouts, ex, musc, now)!;
+  assert.ok(sug && sug.daysAgo >= 1, 'suggests a routine not done today');
+  const sugMuscles = new Set(sug.muscles);
+  const freshest = [...musc].filter((x) => x.lastDays !== null).sort((a, b2) => b2.freshness - a.freshness)[0];
+  assert.ok(sugMuscles.has(freshest.muscle) || sug.freshness >= 80, 'the suggested routine trains fresh muscles');
+
+  // performance index: lifts above their recent level score above 1
+  const better = mkW(addD(day0, 0), split[0], 10);
+  const perf = performanceIndex(better, workouts, ex)!;
+  assert.ok(perf > 1.05, `+10 kg on every lift is a good day (${perf.toFixed(3)})`);
+}
+
+// ------------------------------------------------------------ readiness learns from lifts
+{
+  const now = new Date(2026, 9, 22, 8, 0).getTime();
+  const day0 = sod(now);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const wellness: Record<string, DayHealth> = {};
+  for (let i = 120; i >= 0; i--) {
+    const t = addD(day0, -i);
+    const asleep = 360 + Math.round(rnd() * 150); // 6–8.5 h, random
+    wellness[dayKey(t)] = { sleep: { start: t - 3600000, end: t + asleep * 60000, bed: asleep + 20, asleep }, hrv: 50 + rnd() * 16, rhr: 54 + rnd() * 3 };
+  }
+  // every other day a workout whose lifts track that morning's sleep
+  const workouts: Workout[] = [];
+  for (let i = 110; i >= 1; i -= 2) {
+    const t = addD(day0, -i);
+    const sleepZ = (wellness[dayKey(t)].sleep!.asleep - 435) / 45;
+    const kg = 100 * (1 + 0.0004 * (110 - i)) * (1 + 0.03 * sleepZ);
+    const start = t + 18 * 3600000;
+    workouts.push({
+      id: 'p' + i,
+      startedAt: start,
+      endedAt: start + 3600000,
+      entries: ['squat', 'bench-press'].map((e, k) => ({ id: `p${i}${k}`, exerciseId: e, sets: [0, 1, 2].map((j) => ({ id: `p${i}${k}${j}`, kg: Math.round(kg * (k ? 0.75 : 1) * 2) / 2, reps: 5, at: start + (k * 3 + j + 1) * 300000 })) })),
+    });
+  }
+  const rd = computeReadiness({ workouts, wellness, activities: [], ex, hrMax: 190, now })!;
+  assert.ok(rd.tuning, 'enough workouts to tune');
+  console.log('   tuning:', JSON.stringify(rd.tuning!.rho, (_, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)));
+  assert.ok((rd.tuning!.rho.sleep ?? 0) > 0.3, 'lifts follow sleep');
+  assert.ok((rd.tuning!.multipliers.sleep ?? 1) > (rd.tuning!.multipliers.hrv ?? 1), 'sleep gains weight over HRV');
+  const sleepW = rd.components.find((c) => c.key === 'sleep')!.weight;
+  assert.ok(sleepW > 0.28, `sleep weight raised (${sleepW.toFixed(2)})`);
 }
 
 console.log('logic tests passed');

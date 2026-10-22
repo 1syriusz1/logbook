@@ -5,7 +5,7 @@ import { exportJSON, replaceDB, resetAll, sanitize, setSettings } from '../lib/s
 import { demoDB } from '../lib/demo';
 import { dayKey, fmtAgo, plural } from '../lib/format';
 import { isNative, shareFile } from '../lib/platform';
-import { connectHealth, disconnectHealth, openHealthConnect, syncHeart, useHealth, type HealthState } from '../lib/health';
+import { connectHealth, disconnectHealth, openHealthConnect, RECOVERY_TYPES, syncHeart, useHealth, type HealthState } from '../lib/health';
 import { Button, Segmented, Stepper } from '../components/ui';
 import { Icon } from '../components/icons';
 import { Page, Sheet } from '../components/layers';
@@ -61,9 +61,17 @@ function HealthSection() {
           )}
         </div>
         <p className="sub hc-text">
-          Logbook reads the heart rate and calories that Google Health saves from your Fitbit, for the time of each workout.
-          Nothing leaves your phone.
+          Logbook reads what Google Health saves from your Fitbit: heart rate and calories for each workout, and sleep, HRV,
+          resting heart rate, breathing rate, steps and other workouts for your morning readiness. Nothing leaves your phone.
         </p>
+        {h.state === 'on' && h.granted.size > 0 && RECOVERY_TYPES.some((t) => !h.granted.has(t)) && (
+          <div className="hc-missing">
+            <span>Readiness also needs sleep, HRV and resting heart rate.</span>
+            <Button size="sm" variant="secondary" onClick={() => connectHealth()}>
+              Allow
+            </Button>
+          </div>
+        )}
         {(h.state === 'on' || h.state === 'denied') && (
           <div className="hc-actions">
             {h.state === 'on' && (

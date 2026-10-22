@@ -13,6 +13,7 @@ import { EntryMenu, FinishSheet, SetSheet, StartSheet, SummarySheet, WorkoutScre
 import { ExerciseForm, PickerSheet } from './screens/Picker';
 import { BodyWeightPage, BodyWeightSheet } from './screens/Body';
 import { ConfirmSheet, SettingsPage } from './screens/Settings';
+import { ReadinessPage } from './screens/Readiness';
 import { hasSaveError } from './lib/store';
 
 const TABS: { id: Tab; icon: IconName; label: string }[] = [
@@ -74,6 +75,8 @@ function LayerView({ layer }: { layer: Layer }) {
       return <BodyWeightSheet layer={layer} date={r.date} />;
     case 'settings':
       return <SettingsPage layer={layer} />;
+    case 'readiness':
+      return <ReadinessPage layer={layer} />;
     case 'confirm':
       return <ConfirmSheet layer={layer} options={r.options} />;
   }

@@ -34,6 +34,7 @@ export type Route =
   | { name: 'bodyweight' }
   | { name: 'bwLog'; date?: string }
   | { name: 'settings' }
+  | { name: 'readiness' }
   | { name: 'confirm'; options: ConfirmOptions };
 
 export type RouteName = Route['name'];

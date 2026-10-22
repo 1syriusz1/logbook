@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { BodyWeightLog, DB, Entry, Exercise, HealthSettings, HeartData, Settings, Workout } from './types';
+import type { Activity, BodyWeightLog, DayHealth, DB, Entry, Exercise, HealthSettings, HeartData, Settings, SleepNight, Workout } from './types';
 import { LIBRARY } from './exercises';
 import { nativeFile } from './platform';
 
@@ -18,6 +18,8 @@ export function emptyDB(): DB {
     bodyweight: [],
     activeId: null,
     settings: { weightStep: 2.5, lastBackupAt: null, hrMax: 190, heatMetric: 'load', health: defaultHealth() },
+    wellness: {},
+    activities: [],
   };
 }
 
@@ -41,9 +43,81 @@ function cleanHeart(v: unknown): HeartData | undefined {
   return out;
 }
 
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+const inRange = (v: unknown, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : undefined);
+
+function cleanSleep(v: unknown): SleepNight | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const s = v as Record<string, unknown>;
+  const start = inRange(s.start, 0, 1e13);
+  const end = inRange(s.end, 0, 1e13);
+  const bed = inRange(s.bed, 0, 24 * 60);
+  const asleep = inRange(s.asleep, 0, 24 * 60);
+  if (start === undefined || end === undefined || bed === undefined || asleep === undefined || end < start) return undefined;
+  const out: SleepNight = { start, end, bed, asleep };
+  for (const k of ['deep', 'rem', 'light', 'awake'] as const) {
+    const x = inRange(s[k], 0, 24 * 60);
+    if (x !== undefined) out[k] = x;
+  }
+  return out;
+}
+
+function cleanWellness(v: unknown): Record<string, DayHealth> {
+  const out: Record<string, DayHealth> = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (!DAY_KEY.test(k) || !raw || typeof raw !== 'object') continue;
+    const d = raw as Record<string, unknown>;
+    const day: DayHealth = {};
+    const sleep = cleanSleep(d.sleep);
+    if (sleep) day.sleep = sleep;
+    const hrv = inRange(d.hrv, 1, 400);
+    if (hrv !== undefined) day.hrv = hrv;
+    const rhr = inRange(d.rhr, 25, 150);
+    if (rhr !== undefined) day.rhr = rhr;
+    const resp = inRange(d.resp, 4, 60);
+    if (resp !== undefined) day.resp = resp;
+    const steps = inRange(d.steps, 0, 200_000);
+    if (steps !== undefined) day.steps = steps;
+    if (Object.keys(day).length) out[k] = day;
+  }
+  return out;
+}
+
+function cleanActivities(v: unknown): Activity[] {
+  if (!Array.isArray(v)) return [];
+  const out: Activity[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== 'object') continue;
+    const a = raw as Record<string, unknown>;
+    const start = inRange(a.start, 0, 1e13);
+    const end = inRange(a.end, 0, 1e13);
+    if (typeof a.id !== 'string' || start === undefined || end === undefined || end <= start) continue;
+    const act: Activity = { id: a.id.slice(0, 80), type: str(a.type, 'other').slice(0, 40), start, end };
+    const kcal = inRange(a.kcal, 0, 20_000);
+    if (kcal !== undefined) act.kcal = kcal;
+    const distance = inRange(a.distance, 0, 1_000_000);
+    if (distance !== undefined) act.distance = distance;
+    if (typeof a.src === 'string' && a.src) act.src = a.src.slice(0, 60);
+    const hr = cleanHeart(a.hr);
+    if (hr) act.hr = hr;
+    out.push(act);
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+
 function cleanHealth(v: unknown): HealthSettings {
   const h = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
-  return { on: h.on === true, since: numOrNull(h.since), history: h.history === true, lastSync: numOrNull(h.lastSync) };
+  const out: HealthSettings = { on: h.on === true, since: numOrNull(h.since), history: h.history === true, lastSync: numOrNull(h.lastSync) };
+  if (h.filled && typeof h.filled === 'object') {
+    const f: HealthSettings['filled'] = {};
+    for (const k of ['sleep', 'hrv', 'rhr', 'resp', 'steps', 'workouts'] as const) {
+      const x = (h.filled as Record<string, unknown>)[k];
+      if (typeof x === 'number' && Number.isFinite(x)) f[k] = x;
+    }
+    out.filled = f;
+  }
+  return out;
 }
 
 /** Accepts anything that looks like a Logbook backup and returns a clean DB. */
@@ -112,6 +186,8 @@ export function sanitize(raw: unknown): DB {
       heatMetric: s.heatMetric === 'sets' || s.heatMetric === 'kcal' ? s.heatMetric : 'load',
       health: cleanHealth(s.health),
     },
+    wellness: cleanWellness(r.wellness),
+    activities: cleanActivities(r.activities),
   };
 }
 
@@ -412,6 +488,43 @@ export interface HeartResult {
   startedAt: number;
   endedAt: number;
   hr: HeartData;
+}
+
+/** Merges recovery data per morning and workouts from other apps; keeps the last ~4 months. */
+export function applyWellness(days: Record<string, DayHealth>, activities?: Activity[], keepFrom?: number) {
+  update((d) => {
+    const wellness = { ...d.wellness };
+    for (const [k, v] of Object.entries(days)) wellness[k] = { ...wellness[k], ...v };
+    if (keepFrom !== undefined) {
+      const cutoff = new Date(keepFrom);
+      const key = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}-${String(cutoff.getDate()).padStart(2, '0')}`;
+      for (const k of Object.keys(wellness)) if (k < key) delete wellness[k];
+    }
+    let list = d.activities;
+    if (activities) {
+      const byId = new Map(d.activities.map((a) => [a.id, a]));
+      for (const a of activities) {
+        const old = byId.get(a.id);
+        // keep heart rate already read unless the session changed
+        byId.set(a.id, old && old.start === a.start && old.end === a.end && old.hr && !a.hr ? { ...a, hr: old.hr } : a);
+      }
+      list = [...byId.values()].filter((a) => keepFrom === undefined || a.end >= keepFrom).sort((x, y) => x.start - y.start);
+    }
+    return { ...d, wellness, activities: list };
+  });
+}
+
+/** Attaches heart rate read for other apps' workouts. */
+export function applyActivityHeart(results: { id: string; start: number; end: number; hr: HeartData }[]) {
+  if (!results.length) return;
+  const byId = new Map(results.map((r) => [r.id, r]));
+  update((d) => ({
+    ...d,
+    activities: d.activities.map((a) => {
+      const r = byId.get(a.id);
+      return r && r.start === a.start && r.end === a.end ? { ...a, hr: r.hr } : a;
+    }),
+  }));
 }
 
 /** Stores heart rate read for workouts (one update for the whole batch). */

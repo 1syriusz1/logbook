@@ -14,6 +14,7 @@ import {
   type WorkoutSummary,
 } from './stats';
 import { heartView, heatLevels, type HeartView, type HeatInfo } from './heart';
+import { computeReadiness, type Readiness, type ReadinessInput } from './readiness';
 
 export { heatCaption, type HeatInfo } from './heart';
 
@@ -105,4 +106,25 @@ export function useNow(interval = 1000, enabled = true): number {
     };
   }, [interval, enabled]);
   return enabled ? now : Date.now();
+}
+
+/**
+ * This morning's readiness. Recomputed when the log or recovery data change,
+ * and every ten minutes (muscle fatigue keeps fading during the day).
+ */
+let lastReady: { key: unknown[]; value: { input: ReadinessInput; today: Readiness | null } } | null = null;
+
+export function useReadiness(): { input: ReadinessInput; today: Readiness | null } {
+  const data = useData();
+  const now = useNow(10 * 60_000);
+  const tick = Math.floor(now / (10 * 60_000));
+  const { db, finished, ex } = data;
+  return useMemo(() => {
+    // shared by the home card and the readiness page, so it is worked out once
+    const key = [finished, db.wellness, db.activities, ex, db.settings.hrMax, tick];
+    if (lastReady && lastReady.key.every((k, i) => k === key[i])) return lastReady.value;
+    const input: ReadinessInput = { workouts: finished, wellness: db.wellness, activities: db.activities, ex, hrMax: db.settings.hrMax, now: Date.now() };
+    lastReady = { key, value: { input, today: computeReadiness(input) } };
+    return lastReady.value;
+  }, [finished, db.wellness, db.activities, ex, db.settings.hrMax, tick]);
 }

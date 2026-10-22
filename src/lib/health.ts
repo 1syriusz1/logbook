@@ -1,23 +1,30 @@
-/* Health Connect: reads heart rate and calories that Google Health (Fitbit)
-   saves on the phone, for the time window of each finished workout.
+/* Health Connect: reads what Google Health (Fitbit) saves on the phone.
+   - heart rate and calories for the time window of each finished workout
+   - recovery data for readiness: sleep, HRV, resting heart rate, breathing
+     rate, steps, and workouts recorded in other apps (rides, runs)
    Everything stays on the device; Logbook only reads. */
 import { useSyncExternalStore } from 'react';
 import { Health, type AggregatedSample, type HealthPlugin } from '@capgo/capacitor-health';
-import type { Workout } from './types';
+import type { Activity, Workout, WellnessKind } from './types';
 import { isNative, onAppResume } from './platform';
-import { applyHeart, getDB, setHealth, type HeartResult } from './store';
+import { applyActivityHeart, applyHeart, applyWellness, getDB, setHealth, type HeartResult } from './store';
 import { coverage, isHeartDue, pickSource, processHeart, prorateKcal, type RawSample } from './heart';
+import { buildNights, combineDays, overlapsWorkout, perMorning } from './wellness';
+import { addDays, dayKey, startOfDay } from './format';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 /** workouts read per sync, newest first; the rest follow on the next one */
 const BATCH = 40;
-const READ = ['heartRate', 'totalCalories'] as const;
+/** Everything Logbook asks for; Health Connect lets you allow each one separately. */
+const READ = ['heartRate', 'totalCalories', 'sleep', 'heartRateVariability', 'restingHeartRate', 'respiratoryRate', 'steps', 'workouts'] as const;
+/** What readiness needs on top of heart rate. */
+export const RECOVERY_TYPES = ['sleep', 'heartRateVariability', 'restingHeartRate'] as const;
 
 type Backend = Pick<
   HealthPlugin,
-  'isAvailable' | 'requestAuthorization' | 'checkAuthorization' | 'readSamples' | 'queryAggregated' | 'openHealthConnectSettings'
+  'isAvailable' | 'requestAuthorization' | 'checkAuthorization' | 'readSamples' | 'queryAggregated' | 'queryWorkouts' | 'openHealthConnectSettings'
 >;
 
 /** The native plugin on Android; tests can swap in a fake. Nothing on the web. */
@@ -51,9 +58,11 @@ export interface HealthUI {
   error: string | null;
   /** workouts being read right now */
   busy: ReadonlySet<string>;
+  /** data types allowed in Health Connect (empty until known) */
+  granted: ReadonlySet<string>;
 }
 
-let ui: HealthUI = { state: 'checking', syncing: false, done: 0, total: 0, error: null, busy: new Set() };
+let ui: HealthUI = { state: 'checking', syncing: false, done: 0, total: 0, error: null, busy: new Set(), granted: new Set() };
 const listeners = new Set<() => void>();
 
 function set(patch: Partial<HealthUI>) {
@@ -104,7 +113,7 @@ export async function refreshHealth(): Promise<HealthState> {
     if (st.historyAccessAuthorized !== undefined && st.historyAccessAuthorized !== hs.history) {
       setHealth({ history: st.historyAccessAuthorized });
     }
-    set({ state: st.readAuthorized.includes('heartRate') ? 'on' : 'denied' });
+    set({ state: st.readAuthorized.includes('heartRate') ? 'on' : 'denied', granted: new Set(st.readAuthorized) });
   } catch {
     set({ state: 'on' });
   }
@@ -124,7 +133,7 @@ export async function connectHealth(): Promise<boolean> {
     }
     const hs = getDB().settings.health;
     setHealth({ on: true, since: hs.since ?? Date.now(), history: st.historyAccessAuthorized === true });
-    set({ state: 'on' });
+    set({ state: 'on', granted: new Set(st.readAuthorized) });
     void syncHeart();
     return true;
   } catch (e) {
@@ -254,64 +263,199 @@ export function syncHeart(ids?: string[]): Promise<void> {
   return running;
 }
 
+/** What to do after a Health Connect error: stop the sync, or skip this item. */
+async function triage(e: unknown): Promise<'stop' | 'skip'> {
+  const m = message(e);
+  if (/quota|rate.?limit/i.test(m)) {
+    set({ error: 'Health Connect asked Logbook to slow down. It will continue later.' });
+    return 'stop';
+  }
+  // A permission error can also mean "too old to read" or "that type isn't allowed";
+  // only stop when heart-rate access itself is gone.
+  if (/permission|security/i.test(m) && (await refreshHealth()) === 'denied') {
+    set({ error: 'Logbook no longer has access to heart rate in Health Connect.' });
+    return 'stop';
+  }
+  return 'skip';
+}
+
+/**
+ * Recovery data per morning. The first time each kind is read for the last
+ * 60 days (or as far as Health Connect allows); after that only the last few
+ * days, which is where late-arriving data lands.
+ */
+async function syncWellness(b: Backend, floor: number, now: number): Promise<boolean> {
+  const hs = getDB().settings.health;
+  const filled = { ...(hs.filled ?? {}) };
+  const today = startOfDay(now);
+  const fullFrom = Math.max(floor, addDays(today, -60));
+  const recentFrom = Math.max(floor, addDays(today, -3));
+  const fromFor = (kind: WellnessKind) => (filled[kind] !== undefined && filled[kind]! <= fullFrom + DAY ? recentFrom : fullFrom);
+  const allowed = (type: string) => ui.granted.size === 0 || ui.granted.has(type);
+  const keepAfter = (map: Record<string, unknown>, from: number) => {
+    const first = dayKey(from);
+    for (const k of Object.keys(map)) if (k < first) delete map[k];
+    return map;
+  };
+  const parts: Parameters<typeof combineDays>[0] = {};
+  let activities: Activity[] | undefined;
+  const values = async (dataType: 'heartRateVariability' | 'restingHeartRate' | 'respiratoryRate', from: number) => {
+    const r = await b.readSamples({ dataType, startDate: iso(from - 12 * HOUR), endDate: iso(now), limit: 0, ascending: true });
+    return r.samples.map((x) => ({ t: Date.parse(x.startDate), value: x.value, src: x.sourceId ?? x.sourceName }));
+  };
+  const jobs: [WellnessKind, string, (from: number) => Promise<void>][] = [
+    [
+      'sleep',
+      'sleep',
+      async (from) => {
+        // Sessions are matched by their start, so reach back into the evening before.
+        const r = await b.readSamples({ dataType: 'sleep', startDate: iso(from - 18 * HOUR), endDate: iso(now), limit: 0, ascending: true });
+        parts.sleep = keepAfter(
+          buildNights(
+            r.samples.map((x) => ({
+              start: Date.parse(x.startDate),
+              end: Date.parse(x.endDate),
+              src: x.sourceId ?? x.sourceName,
+              stages: x.stages?.map((st) => ({ start: Date.parse(st.startDate), end: Date.parse(st.endDate), stage: st.stage })),
+            })),
+          ),
+          from,
+        ) as typeof parts.sleep;
+      },
+    ],
+    ['hrv', 'heartRateVariability', async (from) => void (parts.hrv = keepAfter(perMorning(await values('heartRateVariability', from), 'hrv'), from) as typeof parts.hrv)],
+    ['rhr', 'restingHeartRate', async (from) => void (parts.rhr = keepAfter(perMorning(await values('restingHeartRate', from), 'rhr'), from) as typeof parts.rhr)],
+    ['resp', 'respiratoryRate', async (from) => void (parts.resp = keepAfter(perMorning(await values('respiratoryRate', from), 'resp'), from) as typeof parts.resp)],
+    [
+      'steps',
+      'steps',
+      async (from) => {
+        const r = await b.queryAggregated({ dataType: 'steps', startDate: iso(startOfDay(from)), endDate: iso(now), bucket: 'day', aggregation: 'sum' });
+        const steps: Record<string, number> = {};
+        // Buckets start at local midnight; the offset keeps a DST shift on the right day.
+        for (const x of r.samples) steps[dayKey(Date.parse(x.startDate) + 2 * HOUR)] = Math.round(x.values?.sum ?? x.value);
+        parts.steps = keepAfter(steps, from) as typeof parts.steps;
+      },
+    ],
+    [
+      'workouts',
+      'workouts',
+      async (from) => {
+        const r = await b.queryWorkouts({ startDate: iso(from - 6 * HOUR), endDate: iso(now), limit: 0, ascending: true });
+        activities = r.workouts
+          .map((x) => ({
+            id: x.platformId ?? `${x.sourceId ?? ''}:${x.startDate}`,
+            type: x.workoutType,
+            start: Date.parse(x.startDate),
+            end: Date.parse(x.endDate),
+            ...(x.totalEnergyBurned ? { kcal: Math.round(x.totalEnergyBurned) } : {}),
+            ...(x.totalDistance ? { distance: Math.round(x.totalDistance) } : {}),
+            ...(x.sourceName ? { src: x.sourceName } : {}),
+          }))
+          .filter((a) => a.end - a.start >= 5 * MIN);
+      },
+    ],
+  ];
+  for (const [kind, type, job] of jobs) {
+    if (!allowed(type)) continue;
+    const from = fromFor(kind);
+    try {
+      await job(from);
+      filled[kind] = Math.min(filled[kind] ?? Infinity, from);
+    } catch (e) {
+      if ((await triage(e)) === 'stop') {
+        applyWellness(combineDays(parts), activities, addDays(today, -120));
+        return false;
+      }
+    }
+  }
+  applyWellness(combineDays(parts), activities, addDays(today, -120));
+  setHealth({ filled });
+  return true;
+}
+
+/** Heart rate for rides, runs and other workouts recorded outside Logbook, for their training load. */
+async function syncActivityHeart(b: Backend, floor: number, now: number): Promise<boolean> {
+  const db = getDB();
+  const due = db.activities
+    .filter((a) => a.start >= floor && !overlapsWorkout(a, db.workouts))
+    .filter((a) => isHeartDue({ id: a.id, startedAt: a.start, endedAt: a.end, entries: [], ...(a.hr ? { hr: a.hr } : {}) }, now))
+    .sort((x, y) => y.start - x.start)
+    .slice(0, 20);
+  const results: { id: string; start: number; end: number; hr: Activity['hr'] & {} }[] = [];
+  let ok = true;
+  for (const a of due) {
+    try {
+      results.push({ id: a.id, start: a.start, end: a.end, hr: await readWorkoutHeart(b, a.start, a.end, floor) });
+    } catch (e) {
+      if ((await triage(e)) === 'stop') {
+        ok = false;
+        break;
+      }
+    }
+  }
+  applyActivityHeart(results);
+  return ok;
+}
+
 async function run(ids?: string[]) {
   const b = backend();
-  const db = getDB();
-  const hs = db.settings.health;
+  const hs = getDB().settings.health;
   if (!b || !hs.on || ui.state === 'denied') return;
   const now = Date.now();
   // Without history access Health Connect serves data from 30 days before the first grant.
   const oldest = hs.history ? 0 : (hs.since ?? now) - 30 * DAY + HOUR;
-  const wanted = ids ? new Set(ids) : null;
-  const list = db.workouts
-    .filter((w): w is Workout & { endedAt: number } => w.endedAt !== null && w.endedAt - w.startedAt >= MIN && w.startedAt >= oldest)
-    .filter((w) => (wanted ? wanted.has(w.id) : isHeartDue(w, now)))
-    .sort((a, b2) => b2.startedAt - a.startedAt)
-    .slice(0, BATCH);
-  if (!list.length) {
-    setHealth({ lastSync: now });
-    return;
-  }
-  set({ syncing: true, done: 0, total: list.length, error: null, busy: new Set(list.map((w) => w.id)) });
-  let pending: HeartResult[] = [];
+  set({ syncing: true, done: 0, total: 0, error: null });
   let failed = 0;
   let stopped = false;
+  let full = false;
   try {
-    for (const w of list) {
+    if (!ids) {
+      stopped = !(await syncWellness(b, oldest, now));
+      if (!stopped) stopped = !(await syncActivityHeart(b, oldest, now));
+    }
+    if (!stopped) {
+      const db = getDB();
+      const wanted = ids ? new Set(ids) : null;
+      const list = db.workouts
+        .filter((w): w is Workout & { endedAt: number } => w.endedAt !== null && w.endedAt - w.startedAt >= MIN && w.startedAt >= oldest)
+        .filter((w) => (wanted ? wanted.has(w.id) : isHeartDue(w, now)))
+        .sort((a, b2) => b2.startedAt - a.startedAt)
+        .slice(0, BATCH);
+      full = list.length === BATCH;
+      set({ total: list.length, busy: new Set(list.map((w) => w.id)) });
+      let pending: HeartResult[] = [];
       try {
-        const hr = await readWorkoutHeart(b, w.startedAt, w.endedAt, oldest);
-        pending.push({ id: w.id, startedAt: w.startedAt, endedAt: w.endedAt, hr });
-      } catch (e) {
-        const m = message(e);
-        if (/quota|rate.?limit/i.test(m)) {
-          set({ error: 'Health Connect asked Logbook to slow down. It will continue later.' });
-          stopped = true;
-          break;
+        for (const w of list) {
+          try {
+            const hr = await readWorkoutHeart(b, w.startedAt, w.endedAt, oldest);
+            pending.push({ id: w.id, startedAt: w.startedAt, endedAt: w.endedAt, hr });
+          } catch (e) {
+            if ((await triage(e)) === 'stop') {
+              stopped = true;
+              break;
+            }
+            failed++;
+          }
+          const busy = new Set(ui.busy);
+          busy.delete(w.id);
+          set({ done: ui.done + 1, busy });
+          // Fill the screen in as results arrive.
+          if (pending.length >= 5) {
+            applyHeart(pending);
+            pending = [];
+          }
         }
-        // A permission error can also mean "too old to read"; only stop if access is really gone.
-        if (/permission|security/i.test(m) && (await refreshHealth()) === 'denied') {
-          set({ error: 'Logbook no longer has access to heart rate in Health Connect.' });
-          stopped = true;
-          break;
-        }
-        failed++;
-      }
-      const busy = new Set(ui.busy);
-      busy.delete(w.id);
-      set({ done: ui.done + 1, busy });
-      // Fill the screen in as results arrive.
-      if (pending.length >= 5) {
+      } finally {
         applyHeart(pending);
-        pending = [];
       }
     }
   } finally {
-    applyHeart(pending);
     setHealth({ lastSync: Date.now() });
     set({ syncing: false, busy: new Set(), ...(failed && !ui.error ? { error: `${failed} workout${failed > 1 ? 's' : ''} couldn’t be read.` } : {}) });
   }
   // A long history goes in batches, with a pause so Health Connect isn't flooded.
-  if (!ids && !stopped && list.length === BATCH) setTimeout(() => void syncHeart(), 20_000);
+  if (!ids && !stopped && full) setTimeout(() => void syncHeart(), 20_000);
 }
 
 /** Startup: work out the state, read what's new, and again whenever the app comes back. */

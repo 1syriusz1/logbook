@@ -1,9 +1,9 @@
 /* Sample training history: ~5 months of a push / pull / legs split with
    steady progression, used for the live preview and "Load sample data". */
-import type { DB, Entry, HeartData, Workout } from './types';
+import type { Activity, DayHealth, DB, Entry, HeartData, Workout } from './types';
 import { emptyDB, uid } from './store';
-import { addDays, dayKey, DAY, startOfDay, startOfWeek } from './format';
-import { processHeart, SETTLE_MS, type RawSample } from './heart';
+import { addDays, dayKey, DAY, startOfDay, startOfWeek, weekday } from './format';
+import { heartView, processHeart, SETTLE_MS, type RawSample } from './heart';
 
 function rng(seed: number) {
   return () => {
@@ -95,6 +95,70 @@ function demoHeart(w: Workout): HeartData {
   return processHeart(start, end, samples, { kcal }, end + SETTLE_MS + 60_000);
 }
 
+/** A steady effort recorded by the band, e.g. a bike ride. */
+function steadyHeart(start: number, end: number, bpm: number, seed: number): HeartData {
+  const r = rng(seed);
+  const samples: RawSample[] = [];
+  let hr = 95;
+  for (let t = start; t <= end; t += 5000) {
+    const target = bpm + Math.sin((t - start) / 420_000) * 9 + (r() - 0.5) * 6;
+    hr += (target - hr) * 0.08;
+    samples.push({ t, bpm: Math.round(hr), src: 'com.fitbit.FitbitMobile', label: 'Google Fitbit Air' });
+  }
+  return processHeart(start, end, samples, { kcal: ((end - start) / 60_000) * 9.5 }, end + SETTLE_MS + 60_000);
+}
+
+/**
+ * Ten weeks of band data: sleep with stages, HRV, resting heart rate and
+ * breathing rate that react to training, a few short nights, a two-day cold
+ * a month ago, and weekend bike rides.
+ */
+function demoRecovery(workouts: Workout[], now: number): { wellness: Record<string, DayHealth>; activities: Activity[] } {
+  const r = rng(424242);
+  const MIN = 60_000;
+  const today = startOfDay(now);
+  const days = 70;
+  const activities: Activity[] = [];
+  const load = new Map<string, number>();
+  for (const w of workouts) {
+    const v = heartView(w.hr, 190);
+    if (v) load.set(dayKey(w.startedAt), (load.get(dayKey(w.startedAt)) ?? 0) + v.load);
+  }
+  for (let i = days; i >= 1; i--) {
+    const t = addDays(today, -i);
+    if (weekday(t) !== 6 || r() > 0.55) continue;
+    const start = t + (9.5 + r() * 1.5) * 3600_000;
+    const end = start + (85 + r() * 60) * MIN;
+    const hr = steadyHeart(start, end, 128 + r() * 10, Math.floor(start / 1000));
+    activities.push({ id: 'demo-ride-' + dayKey(t), type: 'biking', start, end, kcal: hr.kcal, distance: Math.round(((end - start) / 3600_000) * 26_000), src: 'Google Fitbit Air', hr });
+    load.set(dayKey(t), (load.get(dayKey(t)) ?? 0) + (heartView(hr, 190)?.load ?? 0));
+  }
+  const wellness: Record<string, DayHealth> = {};
+  for (let i = days; i >= 0; i--) {
+    const t = addDays(today, -i);
+    const key = dayKey(t);
+    const yLoad = load.get(dayKey(addDays(t, -1))) ?? 0;
+    const trend = (days - i) / days;
+    const sick = i === 33 || i === 32;
+    const short = i > 0 && r() < 0.12;
+    const asleep = Math.round(short ? 320 + r() * 60 : 430 + r() * 65 + (yLoad > 150 ? 15 : 0));
+    const awake = Math.round(asleep * (0.05 + r() * 0.04));
+    const bed = asleep + awake + Math.round(4 + r() * 10);
+    const deep = Math.round(asleep * (0.15 + r() * 0.06));
+    const rem = Math.round(asleep * (0.2 + r() * 0.05));
+    const start = t - (55 + r() * 50) * MIN;
+    const lnHrv = Math.log(56) + 0.08 * trend - 0.0006 * yLoad - (short ? 0.09 : 0) - (sick ? 0.28 : 0) + (i === 0 ? 0.06 : (r() - 0.5) * 0.12);
+    wellness[key] = {
+      sleep: { start, end: start + bed * MIN, bed, asleep, deep, rem, light: asleep - deep - rem, awake },
+      hrv: Math.round(Math.exp(lnHrv) * 10) / 10,
+      rhr: Math.round(55.5 - 1.5 * trend + yLoad * 0.012 + (short ? 1.2 : 0) + (sick ? 6 : 0) + (r() - 0.5) * 1.6),
+      resp: Math.round((14.6 + (sick ? 1.9 : 0) + (r() - 0.5) * 0.4) * 10) / 10,
+      steps: i === 0 ? 2400 : Math.round(6500 + r() * 6000),
+    };
+  }
+  return { wellness, activities };
+}
+
 export function demoDB(now = Date.now()): DB {
   const r = rng(20261019);
   const db = emptyDB();
@@ -161,6 +225,9 @@ export function demoDB(now = Date.now()): DB {
   for (const w of workouts) if (w.startedAt >= now - 70 * DAY) w.hr = demoHeart(w);
 
   db.workouts = workouts.sort((a, b) => a.startedAt - b.startedAt);
+  const recovery = demoRecovery(db.workouts, now);
+  db.wellness = recovery.wellness;
+  db.activities = recovery.activities;
   db.bodyweight = bodyweight;
   db.settings.lastBackupAt = now - 3 * DAY;
   return db;

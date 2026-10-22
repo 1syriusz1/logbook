@@ -79,15 +79,16 @@ Dane zostają.
 
 ## Tętno i kalorie z opaski (Fitbit Air / Google Health)
 
-Logbook czyta z **Health Connect** tętno i spalone kalorie, które zapisuje tam aplikacja
-Google Health, i dopisuje je do każdego treningu (w oknie od startu do końca treningu).
+Logbook czyta z **Health Connect** dane, które zapisuje tam aplikacja Google Health:
+tętno i kalorie dopisuje do każdego treningu (w oknie od startu do końca), a sen, HRV,
+tętno spoczynkowe, oddech, kroki i treningi z innych aplikacji służą do gotowości.
 
 Jednorazowo:
 
 1. W aplikacji **Google Health**: **Connections → Partner apps → Sync your favorite health
    apps → Set up**. Włącz synchronizację z Health Connect (co najmniej tętno i kalorie)
    i zezwól na dane historyczne i działanie w tle.
-2. W Logbooku: **Settings → Heart rate → Connect** → zaznacz oba uprawnienia
+2. W Logbooku: **Settings → Heart rate → Connect** → zezwól na wszystkie typy danych
    (i dostęp do starszych danych, jeśli telefon o to zapyta).
 
 Potem dane dociągają się same przy każdym otwarciu aplikacji. Opaska synchronizuje się
@@ -105,6 +106,29 @@ Co z tego wychodzi:
 Strefy liczą się od tętna maksymalnego z ustawień (domyślnie 190; orientacyjnie
 208 − 0,7 × wiek). Bez zgody na starsze dane Health Connect udostępnia tylko dane
 od 30 dni przed pierwszym połączeniem.
+
+## Gotowość treningowa (Readiness)
+
+Na ekranie głównym: liczba 1–100, pionowy pasek i zalecenie na dziś
+(**Go heavy** 80+, **Normal session** 60–79, **Keep it light** 40–59, **Recover** < 40),
+do tego podpowiedź, który z Twoich treningów najlepiej pasuje do świeżych mięśni.
+
+Z czego się liczy (każdy sygnał porównany z Twoją normą: mediana i typowy rozrzut z 60 dni):
+
+| Sygnał | Waga bazowa | Skąd |
+| --- | --- | --- |
+| HRV (ostatnia noc + trend 7 dni, skala log) | 32% | Health Connect |
+| Sen (długość vs potrzeba, dług snu, sen głęboki + REM, regularność) | 28% | Health Connect |
+| Obciążenie treningowe (forma: średnie 7 i 42 dni, wczorajszy skok) | 22% | treningi z Logbooka + inne aplikacje (rower, bieg) + kroki |
+| Tętno spoczynkowe | 18% | Health Connect |
+| Częstość oddechu | tylko alarm | Health Connect |
+| Świeżość mięśni (zmęczenie z serii, półokres ~1 doba, nogi dłużej) | do zaleceń | Logbook |
+
+Bezpieczniki: tętno spoczynkowe +5 i HRV wyraźnie w dół → max 35; wyższy oddech
+(+1/min) razem z tętnem → max 30; poniżej 5 h snu → max 50; samo obciążenie bez danych
+z opaski → max 79. Po ~20 treningach z danymi algorytm sprawdza, który sygnał najlepiej
+przewidywał Twoje wyniki na sztandze (e1RM vs ostatnie sesje) i podbija jego wagę
+(maks. +40%, min. −20%). To nie jest porada medyczna.
 
 ## Kopia zapasowa
 
@@ -141,6 +165,8 @@ npx cap open android   # otwarcie w Android Studio (opcjonalnie)
 | `src/lib/stats.ts` | serie, objętość, szacowany 1RM (Epley), rekordy, heatmapa, tygodnie |
 | `src/lib/heart.ts` | tętno: przetwarzanie próbek, strefy, Load, ćwiczenia na osi czasu |
 | `src/lib/health.ts` | Health Connect (plugin `@capgo/capacitor-health`): uprawnienia i synchronizacja |
+| `src/lib/wellness.ts` | sen, HRV, tętno spoczynkowe, oddech i kroki przypisane do poranków |
+| `src/lib/readiness.ts` | algorytm gotowości, świeżość mięśni, dopasowanie wag do Twoich wyników |
 | `scripts/patch-health.mjs` | po `npm install` dodaje do pluginu sumowanie kalorii całkowitych |
 | `src/lib/exercises.ts` | biblioteka ćwiczeń i partie mięśniowe |
 | `src/components/charts.tsx` | wykresy SVG: linia, słupki, heatmapa, tętno, sparkline |

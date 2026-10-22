@@ -77,6 +77,53 @@ export interface BodyWeightLog {
   kg: number;
 }
 
+/** Sleep that belongs to a morning (the night before, plus naps before 15:00). */
+export interface SleepNight {
+  /** first bedtime and last wake-up, epoch ms */
+  start: number;
+  end: number;
+  /** minutes in bed (sum of sessions) */
+  bed: number;
+  /** minutes asleep */
+  asleep: number;
+  /** minutes per stage, when the band reports stages */
+  deep?: number;
+  rem?: number;
+  light?: number;
+  awake?: number;
+}
+
+/**
+ * Recovery data from Health Connect for one morning ("YYYY-MM-DD").
+ * Night-time values (sleep, HRV, breathing) belong to the morning they end on.
+ */
+export interface DayHealth {
+  sleep?: SleepNight;
+  /** heart rate variability, RMSSD in ms */
+  hrv?: number;
+  /** resting heart rate, bpm */
+  rhr?: number;
+  /** breathing rate during sleep, breaths per minute */
+  resp?: number;
+  /** steps on that calendar day */
+  steps?: number;
+}
+
+/** A workout recorded by another app (e.g. a bike ride in Google Health), for training load. */
+export interface Activity {
+  /** Health Connect record id */
+  id: string;
+  /** Health Connect exercise type, e.g. "biking" */
+  type: string;
+  start: number;
+  end: number;
+  kcal?: number;
+  /** metres */
+  distance?: number;
+  src?: string;
+  hr?: HeartData;
+}
+
 /** What the brightness of a heatmap square stands for. */
 export type HeatMetric = 'sets' | 'load' | 'kcal';
 
@@ -88,7 +135,11 @@ export interface HealthSettings {
   /** access to data older than that was granted too */
   history: boolean;
   lastSync: number | null;
+  /** per kind of recovery data, the earliest time already read (so later syncs only refresh recent days) */
+  filled?: Partial<Record<WellnessKind, number>>;
 }
+
+export type WellnessKind = 'sleep' | 'hrv' | 'rhr' | 'resp' | 'steps' | 'workouts';
 
 export interface Settings {
   weightStep: number;
@@ -106,4 +157,8 @@ export interface DB {
   bodyweight: BodyWeightLog[];
   activeId: string | null;
   settings: Settings;
+  /** recovery data per morning, from Health Connect */
+  wellness: Record<string, DayHealth>;
+  /** workouts from other apps, from Health Connect */
+  activities: Activity[];
 }
